@@ -61,3 +61,18 @@ def test_each_authenticated_user_is_limited_to_their_merchant(client):
     assert first_identity["merchant"]["name"] == "First Merchant"
     assert second_identity["merchant"]["name"] == "Second Merchant"
     assert first_identity["merchant"]["id"] != second_identity["merchant"]["id"]
+
+
+def test_authenticated_user_cannot_read_another_merchants_resource(client):
+    signup(client, "first@example.com", "First Merchant")
+    second_signup = signup(client, "second@example.com", "Second Merchant")
+    second_merchant_id = second_signup.json()["merchant"]["id"]
+
+    client.post(
+        "/api/v1/auth/login",
+        json={"email": "first@example.com", "password": "correct horse battery"},
+    )
+
+    response = client.get(f"/api/v1/auth/merchants/{second_merchant_id}")
+
+    assert response.status_code == 404

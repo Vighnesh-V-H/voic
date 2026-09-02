@@ -34,7 +34,7 @@ export default async function DashboardPage() {
       <section className="dashboard-main">
         <div className="dashboard-heading">
           <div>
-            <p className="eyebrow">Merchant workspace</p>
+            <p className="eyebrow">Merchant account</p>
             <h1>{identity.merchant.name}</h1>
           </div>
           <p>{identity.user.email}</p>

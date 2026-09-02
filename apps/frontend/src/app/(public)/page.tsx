@@ -28,8 +28,8 @@ export default function Home() {
         <div className="signal-card" aria-label="Voic integration status preview">
           <div className="signal-card-header"><span>Workspace signal</span><span>Phase 01</span></div>
           <div className="signal-line"><span className="signal-dot" /><div><strong>Identity verified</strong><small>Merchant boundary established</small></div></div>
-          <div className="signal-line"><span className="signal-dot" /><div><strong>Provider-ready</strong><small>Secure connection comes next</small></div></div>
-          <div className="signal-line"><span className="signal-dot" /><div><strong>Events have a home</strong><small>Every payment belongs somewhere</small></div></div>
+          <div className="signal-line"><span className="signal-dot" /><div><strong>Provider-ready</strong><small>Provider connection comes next</small></div></div>
+          <div className="signal-line"><span className="signal-dot" /><div><strong>Events have a home</strong><small>Every payment event belongs somewhere</small></div></div>
         </div>
       </section>
     </main>

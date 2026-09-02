@@ -10,7 +10,7 @@ export default function SignupPage() {
       </div>
       <div className="auth-card">
         <h2>Create your account</h2>
-        <p>Your workspace starts with one secure merchant identity.</p>
+        <p>Your merchant account starts with one secure identity.</p>
         <AuthForm mode="signup" />
       </div>
     </section>

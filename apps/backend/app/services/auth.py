@@ -15,6 +15,10 @@ from app.models.user import User
 password_hash = PasswordHash.recommended()
 
 
+def normalize_email(value: str) -> str:
+    return value.strip().lower()
+
+
 def hash_password(value: str) -> str:
     return password_hash.hash(value)
 
