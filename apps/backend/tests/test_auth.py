@@ -1,3 +1,6 @@
+from app.core.config import get_settings
+
+
 def signup(client, email: str, merchant_name: str = "Acme"):
     return client.post(
         "/api/v1/auth/signup",
@@ -25,7 +28,7 @@ def test_login_sets_http_only_session_and_me_returns_merchant(client):
     )
 
     assert response.status_code == 200
-    assert response.headers["set-cookie"].startswith("voic_session=")
+    assert response.headers["set-cookie"].startswith(f"{get_settings().session_cookie_name}=")
     assert "HttpOnly" in response.headers["set-cookie"]
     assert client.get("/api/v1/auth/me").json()["merchant"]["name"] == "Acme Store"
 
