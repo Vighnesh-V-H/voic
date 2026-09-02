@@ -1,0 +1,1 @@
+"""Voic backend application."""
