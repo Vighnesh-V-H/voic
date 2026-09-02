@@ -12,12 +12,23 @@
 - `skills-lock.json:1` — tracks 37 installed skills.
 
 ## Commands
-No executable commands discovered. If you add a stack, document the exact verify sequence here (e.g. `lint -> typecheck -> test`) and how to run a single test/package.
+- Frontend verification: run `npm run lint` and `npm run build` from `apps/frontend`.
+- Backend verification: run `.venv\Scripts\python.exe -m pytest -q` and `.venv\Scripts\python.exe -m compileall -q app migrations tests` from `apps/backend`.
+- Backend migration verification: run `.venv\Scripts\python.exe -m alembic upgrade head` from `apps/backend` against a configured PostgreSQL database; use `.venv\Scripts\python.exe -m alembic upgrade head --sql` for offline generation.
+- Run one backend test with `.venv\Scripts\python.exe -m pytest tests/test_auth.py -q` from `apps/backend`.
 
 ## Workflow
 - Branch: `main` tracks `origin/main`. Check `git status` / `git diff` before committing; stage only intended files.
 - No CI workflows, pre-commit hooks, or task runner config found.
 - For GitHub operations use `gh` CLI — repo inferred from `git remote -v`.
+
+## Task and branch workflow
+- Assess the size of every ticket or feature before implementation.
+- Keep a ticket that fits one focused implementation session on one dedicated branch.
+- Create a new branch for every ticket or feature; do not implement ticket work directly on `main`.
+- When a ticket is too large for one focused implementation session, split it into smaller, independently verifiable tickets before coding.
+- Give each split ticket its own branch and record the dependency order between those branches or tickets.
+- Prefer branches named `feature/<ticket-id>-<short-slug>` for features and `fix/<ticket-id>-<short-slug>` for fixes.
 
 ## Agent skills
 
