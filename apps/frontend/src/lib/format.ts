@@ -1,9 +1,18 @@
 import type { Payment } from "@/lib/api";
 
+/**
+ * Fixed formatting locale for every user-visible number and date.
+ *
+ * The server (Node) and the browser resolve the default locale differently
+ * (e.g. "Aug 22" vs "22 Aug"), which breaks hydration. Pinning one locale
+ * keeps SSR HTML identical to the first client render.
+ */
+const APP_LOCALE = "en-US";
+
 export function formatMoney(amount: number | null | undefined, currency: string | null | undefined) {
   if (amount === null || amount === undefined || !currency) return "—";
   try {
-    return new Intl.NumberFormat(undefined, {
+    return new Intl.NumberFormat(APP_LOCALE, {
       style: "currency",
       currency: currency.toUpperCase(),
     }).format(amount / 100);
@@ -16,7 +25,7 @@ export function formatDateTime(value: string | null | undefined) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(APP_LOCALE, {
     day: "numeric",
     month: "short",
     hour: "2-digit",
@@ -51,6 +60,9 @@ export type PaymentSummary = {
   cancelled: number;
   completedVolume: number;
   totalVolume: number;
+  pendingVolume: number;
+  failedVolume: number;
+  cancelledVolume: number;
   successRate: number;
   primaryCurrency: string | null;
   mixedCurrencies: boolean;
@@ -84,11 +96,17 @@ export function summarizePayments(payments: Payment[]): PaymentSummary {
 
   let completedVolume = 0;
   let totalVolume = 0;
+  let pendingVolume = 0;
+  let failedVolume = 0;
+  let cancelledVolume = 0;
   if (primaryCurrency) {
     for (const payment of payments) {
       if (payment.currency?.toUpperCase() !== primaryCurrency) continue;
       totalVolume += payment.amount;
       if (payment.status === "COMPLETED") completedVolume += payment.amount;
+      else if (isPendingStatus(payment.status)) pendingVolume += payment.amount;
+      else if (payment.status === "FAILED") failedVolume += payment.amount;
+      else if (payment.status === "CANCELLED") cancelledVolume += payment.amount;
     }
   }
 
@@ -100,6 +118,9 @@ export function summarizePayments(payments: Payment[]): PaymentSummary {
     cancelled,
     completedVolume,
     totalVolume,
+    pendingVolume,
+    failedVolume,
+    cancelledVolume,
     successRate: total === 0 ? 0 : Math.round((completed / total) * 100),
     primaryCurrency,
     mixedCurrencies: currencyCounts.size > 1,
@@ -108,19 +129,40 @@ export function summarizePayments(payments: Payment[]): PaymentSummary {
 
 export type DayBucket = { key: string; label: string; value: number };
 
-export function bucketCompletedVolume(payments: Payment[], days = 14): DayBucket[] {
+export type TrendPoint = {
+  created_at?: string | null;
+  amount: number;
+  currency: string;
+  status: string;
+};
+
+function startOfDay(date: Date) {
+  const day = new Date(date);
+  day.setHours(0, 0, 0, 0);
+  return day;
+}
+
+function dayKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+/**
+ * Bucket completed volume per day across an explicit date range (inclusive).
+ *
+ * Only the most common currency is counted so mixed-currency merchants get
+ * one honest series. Ranges over 90 days are clamped by the caller.
+ */
+export function bucketVolumeByRange(payments: TrendPoint[], start: Date, end: Date): DayBucket[] {
+  const first = startOfDay(start);
+  const last = startOfDay(end);
   const buckets = new Map<string, number>();
   const labels = new Map<string, string>();
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  for (let index = days - 1; index >= 0; index -= 1) {
-    const date = new Date(today);
-    date.setDate(today.getDate() - index);
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  for (let cursor = new Date(first); cursor <= last; cursor.setDate(cursor.getDate() + 1)) {
+    const key = dayKey(cursor);
     buckets.set(key, 0);
     labels.set(
       key,
-      new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" }).format(date),
+      new Intl.DateTimeFormat(APP_LOCALE, { day: "numeric", month: "short" }).format(cursor),
     );
   }
 
@@ -130,7 +172,7 @@ export function bucketCompletedVolume(payments: Payment[], days = 14): DayBucket
     if (primary && payment.currency?.toUpperCase() !== primary) continue;
     const date = new Date(payment.created_at);
     if (Number.isNaN(date.getTime())) continue;
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    const key = dayKey(date);
     if (buckets.has(key)) buckets.set(key, (buckets.get(key) ?? 0) + payment.amount);
   }
 
@@ -141,7 +183,7 @@ export function bucketCompletedVolume(payments: Payment[], days = 14): DayBucket
   }));
 }
 
-function mostCommonCurrency(payments: Payment[]): string | null {
+function mostCommonCurrency(payments: { currency: string }[]): string | null {
   const counts = new Map<string, number>();
   for (const payment of payments) {
     const code = payment.currency?.toUpperCase();

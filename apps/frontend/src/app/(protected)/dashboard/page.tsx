@@ -3,22 +3,29 @@ import Link from "next/link";
 import { ArrowUpRightIcon } from "lucide-react";
 
 import { AppBreadcrumbs } from "@/components/app-breadcrumbs";
+import { PaymentFlowChart } from "@/components/payment-flow-chart";
 import { PaymentsTable } from "@/components/payments-table";
-import { RevenueChart } from "@/components/revenue-chart";
+import { RecoveryPieChart } from "@/components/recovery-pie-chart";
+import { RevenueTrendChart } from "@/components/revenue-trend-chart";
 import { StatCard } from "@/components/stat-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { bucketCompletedVolume, formatMoney, summarizePayments } from "@/lib/format";
+import { formatMoney, summarizePayments } from "@/lib/format";
 import { loadDashboardData } from "@/lib/server-api";
 
 /**
- * Merchant dashboard: real payment metrics, revenue chart, and every payment.
+ * Merchant dashboard: real payment metrics, charts, and every payment.
  */
 export default async function DashboardPage() {
   const { identity, payments, connection, products, prices } = await loadDashboardData();
   const summary = summarizePayments(payments);
-  const buckets = bucketCompletedVolume(payments, 14);
+  const trendPayments = payments.map((payment) => ({
+    created_at: payment.created_at,
+    amount: payment.amount,
+    currency: payment.currency,
+    status: payment.status,
+  }));
 
   const productNames = new Map(products.map((product) => [product.id, product.name]));
   const priceLabels: Record<string, { name: string; productId: string | null }> = {};
@@ -79,16 +86,37 @@ export default async function DashboardPage() {
         />
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Revenue · last 14 days</CardTitle>
-            <CardDescription>Completed payment volume per day</CardDescription>
+            <CardTitle>Payment trend</CardTitle>
+            <CardDescription>Completed volume per day for the selected range</CardDescription>
           </CardHeader>
           <CardContent>
-            <RevenueChart buckets={buckets} currency={summary.primaryCurrency} />
+            <RevenueTrendChart payments={trendPayments} currency={summary.primaryCurrency} />
           </CardContent>
         </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Payment flow</CardTitle>
+            <CardDescription>Every created payment flowing into its outcome</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <PaymentFlowChart summary={summary} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Money recovery</CardTitle>
+            <CardDescription>Recovered vs awaiting vs failed volume</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <RecoveryPieChart summary={summary} />
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle>Status breakdown</CardTitle>
