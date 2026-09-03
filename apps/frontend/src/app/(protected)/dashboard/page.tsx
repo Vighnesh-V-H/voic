@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 
 import { Identity } from "@/lib/api";
+import { StripeIntegration } from "@/components/stripe-integration";
 
 async function getIdentity(): Promise<Identity> {
   const cookieHeader = (await cookies()).toString();
@@ -51,6 +52,7 @@ export default async function DashboardPage() {
             <p className="identity-value">{identity.merchant.name}</p>
           </article>
         </div>
+        <StripeIntegration />
       </section>
     </main>
   );

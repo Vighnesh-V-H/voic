@@ -10,6 +10,13 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 60 * 60 * 24 * 7
     cookie_secure: bool = False
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    frontend_url: str = "http://localhost:3000"
+    stripe_client_id: str = ""
+    stripe_platform_secret_key: str = ""
+    stripe_oauth_redirect_uri: str = "http://localhost:8000/api/v1/stripe/callback"
+    stripe_oauth_scope: str = "read_write"
+    stripe_mode: str = "test"
+    stripe_connect_webhook_secret: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
