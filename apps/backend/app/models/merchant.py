@@ -8,6 +8,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 if TYPE_CHECKING:
+    from app.models.oauth_state import OAuthState
+    from app.models.provider_connection import ProviderConnection
     from app.models.user import User
 
 
@@ -22,3 +24,9 @@ class Merchant(Base):
     )
 
     users: Mapped[list["User"]] = relationship(back_populates="merchant")
+    provider_connections: Mapped[list["ProviderConnection"]] = relationship(
+        back_populates="merchant", cascade="all, delete-orphan"
+    )
+    oauth_states: Mapped[list["OAuthState"]] = relationship(
+        back_populates="merchant", cascade="all, delete-orphan"
+    )

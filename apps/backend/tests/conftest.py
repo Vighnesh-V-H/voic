@@ -23,7 +23,9 @@ def client():
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
+    app.state.testing_session_factory = TestingSessionLocal
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+    del app.state.testing_session_factory
     Base.metadata.drop_all(engine)

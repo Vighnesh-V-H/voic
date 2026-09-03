@@ -10,6 +10,17 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 60 * 60 * 24 * 7
     cookie_secure: bool = False
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    token_encryption_key: str = ""
+    razorpay_client_id: str = ""
+    razorpay_client_secret: str = ""
+    razorpay_redirect_uri: str = "http://localhost:8000/api/v1/integrations/razorpay/callback"
+    razorpay_frontend_redirect_uri: str = "http://localhost:3000/settings/integrations"
+    razorpay_authorize_url: str = "https://auth.razorpay.com/authorize"
+    razorpay_token_url: str = "https://auth.razorpay.com/token"
+    razorpay_scope: str = "read_only"
+    razorpay_mode: str = "test"
+    oauth_state_ttl_seconds: int = 10 * 60
+    oauth_http_timeout_seconds: float = 10.0
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
