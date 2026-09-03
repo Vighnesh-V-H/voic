@@ -7,7 +7,7 @@
  * Voic color system — Premium Utilitarian Minimalism (warm monochrome + spot pastels)
  *
  * Token layers (primitive -> semantic -> component):
- * - Primitives: warm bone neutrals, off-black ink, 4 desaturated pastels.
+ * - Primitives: warm bone neutrals, off-black ink, 4 saturated status fills.
  * - Semantics: background / surface / text / border / accent roles below.
  * - Components reference semantic tokens only (bg-card, text-muted-foreground, ...).
  *
@@ -53,23 +53,24 @@
   --input: #eaeaea;
   --ring: #111111;
 
-  /* Spot pastels — tags, status badges, inline code, icon washes only */
-  --pastel-red-bg: #fdebec;
-  --pastel-red-text: #9f2f2d;
-  --pastel-red-border: #f5cfcf;
-  --pastel-blue-bg: #e1f3fe;
-  --pastel-blue-text: #1f6c9f;
-  --pastel-blue-border: #bfddf2;
-  --pastel-green-bg: #edf3ec;
-  --pastel-green-text: #346538;
-  --pastel-green-border: #cbd8ca;
-  --pastel-yellow-bg: #fbf3db;
-  --pastel-yellow-text: #956400;
-  --pastel-yellow-border: #e8d9a8;
+  /* Semantic fills — status badges and alerts only. Saturated enough to
+     read at 11px uppercase; text stays dark for AA contrast on the fill. */
+  --pastel-red-bg: #fee4e2;
+  --pastel-red-text: #b42318;
+  --pastel-red-border: #fecdc2;
+  --pastel-blue-bg: #e0eaff;
+  --pastel-blue-text: #175cd3;
+  --pastel-blue-border: #b2ddff;
+  --pastel-green-bg: #dcfae6;
+  --pastel-green-text: #067647;
+  --pastel-green-border: #abefc6;
+  --pastel-yellow-bg: #fef0c7;
+  --pastel-yellow-text: #b54708;
+  --pastel-yellow-border: #fedf89;
 
   /* Charts stay monochrome; green reserved for "connected / healthy" */
   --chart-1: #111111;
-  --chart-2: #346538;
+  --chart-2: #067647;
   --chart-3: #787774;
   --chart-4: #d6d3d1;
   --chart-5: #a8a29e;
@@ -112,21 +113,21 @@
   --input: rgba(255, 255, 255, 0.1);
   --ring: #ede9e3;
 
-  --pastel-red-bg: rgba(240, 168, 168, 0.12);
-  --pastel-red-text: #f0b8b8;
-  --pastel-red-border: rgba(240, 168, 168, 0.25);
-  --pastel-blue-bg: rgba(125, 190, 230, 0.12);
-  --pastel-blue-text: #9ecfee;
-  --pastel-blue-border: rgba(125, 190, 230, 0.25);
-  --pastel-green-bg: rgba(140, 185, 140, 0.12);
-  --pastel-green-text: #a9cfa9;
-  --pastel-green-border: rgba(140, 185, 140, 0.25);
-  --pastel-yellow-bg: rgba(220, 190, 110, 0.12);
-  --pastel-yellow-text: #e3c98a;
-  --pastel-yellow-border: rgba(220, 190, 110, 0.25);
+  --pastel-red-bg: rgba(240, 68, 56, 0.18);
+  --pastel-red-text: #f97066;
+  --pastel-red-border: rgba(249, 112, 102, 0.4);
+  --pastel-blue-bg: rgba(84, 162, 255, 0.18);
+  --pastel-blue-text: #84caff;
+  --pastel-blue-border: rgba(132, 202, 255, 0.4);
+  --pastel-green-bg: rgba(18, 183, 106, 0.18);
+  --pastel-green-text: #6ce9a6;
+  --pastel-green-border: rgba(108, 233, 166, 0.4);
+  --pastel-yellow-bg: rgba(247, 144, 9, 0.18);
+  --pastel-yellow-text: #fdb022;
+  --pastel-yellow-border: rgba(253, 176, 34, 0.4);
 
   --chart-1: #ede9e3;
-  --chart-2: #a9cfa9;
+  --chart-2: #6ce9a6;
   --chart-3: #a8a29e;
   --chart-4: #57534e;
   --chart-5: #78716c;
