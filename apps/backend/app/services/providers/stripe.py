@@ -4,11 +4,16 @@ import json
 import time
 from base64 import b64encode
 from collections.abc import Mapping
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
 from app.core.config import Settings
+
+
+class StripeProviderError(Exception):
+    pass
 
 
 def verify_webhook_signature(payload: bytes, signature_header: str, secret: str) -> bool:
@@ -125,5 +130,11 @@ class StripeProvider:
             },
             method="POST",
         )
-        with urlopen(request, timeout=10) as response:
-            return json.loads(response.read())
+        try:
+            with urlopen(request, timeout=10) as response:
+                return json.loads(response.read())
+        except HTTPError as error:
+            body = error.read().decode(errors="replace")
+            raise StripeProviderError(f"Stripe responded {error.code}: {body}") from error
+        except URLError as error:
+            raise StripeProviderError(f"Stripe request failed: {error.reason}") from error

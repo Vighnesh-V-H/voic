@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from logging import getLogger
 from secrets import token_urlsafe
 from collections.abc import Mapping
 
@@ -22,6 +23,8 @@ from app.services.providers.stripe import StripeProvider
 
 router = APIRouter(prefix="/stripe", tags=["stripe"])
 payment_router = APIRouter(tags=["payments"])
+
+logger = getLogger(__name__)
 
 
 class StripeConnectionResponse(BaseModel):
@@ -70,7 +73,7 @@ def create_oauth_state(db: Session, user: User, settings: Settings) -> str:
             state_hash=state_digest(raw_state),
             user_id=user.id,
             merchant_id=user.merchant_id,
-            expires_at=datetime.now(UTC) + timedelta(minutes=10),
+            expires_at=datetime.now(UTC) + timedelta(minutes=30),
         )
     )
     db.commit()
@@ -136,6 +139,7 @@ def callback(
     try:
         result = provider.exchange_oauth_code(code)
     except Exception as error:
+        logger.error("Stripe token exchange failed: %s", error)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail="OAUTH_TOKEN_EXCHANGE_FAILED"
         ) from error
