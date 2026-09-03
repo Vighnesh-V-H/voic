@@ -49,6 +49,9 @@ export default async function DashboardPage() {
             <h2>Merchant boundary</h2>
             <span className="status">Ready for integrations</span>
             <p className="identity-value">{identity.merchant.name}</p>
+            <Link className="text-link dashboard-link" href="/settings/integrations">
+              Manage payment providers
+            </Link>
           </article>
         </div>
       </section>
