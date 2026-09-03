@@ -564,6 +564,7 @@ class PaymentResponse(BaseModel):
     status: str
     client_secret: str | None = None
     url: str | None = None
+    created_at: datetime | None = None
 
 
 def payment_response(payment: Payment, client_secret: str | None = None, url: str | None = None) -> PaymentResponse:
@@ -588,6 +589,7 @@ def payment_response(payment: Payment, client_secret: str | None = None, url: st
         status=payment.status,
         client_secret=client_secret,
         url=url if url is not None else payment.provider_payment_link_url,
+        created_at=payment.created_at,
     )
 
 

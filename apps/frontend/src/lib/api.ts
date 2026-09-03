@@ -45,6 +45,7 @@ export type Payment = {
   status: string;
   client_secret?: string | null;
   url?: string | null;
+  created_at?: string | null;
 };
 
 export type PaymentEvent = {

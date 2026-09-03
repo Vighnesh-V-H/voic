@@ -134,6 +134,7 @@ export function AuthForm({ mode }: AuthFormProps) {
         <Button
           variant="link"
           className="h-auto p-0 text-sm"
+          nativeButton={false}
           render={
             <Link href={isSignup ? "/auth/login" : "/auth/signup"}>
               {isSignup ? "Log in" : "Create an account"}
