@@ -76,7 +76,7 @@ export function AuthForm({ mode }: AuthFormProps) {
                 name="merchant_name"
                 value={merchantName}
                 onChange={(event) => setMerchantName(event.target.value)}
-                placeholder="Acme Store"
+                placeholder="Your store name"
                 required
               />
             </Field>

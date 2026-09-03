@@ -2,8 +2,8 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { Identity } from "@/lib/api";
+import { Reveal } from "@/components/reveal";
 import { StripeIntegration } from "@/components/stripe-integration";
-import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -11,7 +11,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { SiteHeader } from "@/components/site-header";
 
 /**
  * Fetch the authenticated user's identity from the backend.
@@ -46,49 +45,47 @@ export default async function DashboardPage() {
   const identity = await getIdentity();
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 pb-16">
-      <SiteHeader>
-        <Badge variant="secondary">
-          <span className="size-1.5 rounded-full bg-chart-2" />
-          Authenticated
-        </Badge>
-      </SiteHeader>
-      <section className="py-10">
+    <section className="flex flex-col py-2">
+      <Reveal>
         <div className="mb-8 flex flex-wrap items-end justify-between gap-5">
           <div>
-            <p className="mb-5 text-xs font-extrabold tracking-[0.14em] text-primary uppercase">
+            <p className="mb-5 text-xs font-semibold tracking-[0.14em] text-muted-foreground uppercase">
               Merchant account
             </p>
-            <h1 className="text-5xl font-extrabold tracking-tighter text-balance sm:text-6xl">
+            <h1 className="font-editorial text-5xl text-balance sm:text-6xl">
               {identity.merchant.name}
             </h1>
           </div>
-          <p className="pb-2 text-muted-foreground">{identity.user.email}</p>
+          <p className="pb-2 font-mono text-sm text-muted-foreground">{identity.user.email}</p>
         </div>
+      </Reveal>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle>Identity</CardTitle>
-              <CardDescription>Session verified by the backend</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-xl font-bold">{identity.user.email}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Merchant boundary</CardTitle>
-              <CardDescription>Ready for integrations</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-xl font-bold">{identity.merchant.name}</p>
-            </CardContent>
-          </Card>
+          <Reveal index={1}>
+            <Card className="card-hover h-full">
+              <CardHeader>
+                <CardTitle>Identity</CardTitle>
+                <CardDescription>Session verified by the backend</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xl font-semibold">{identity.user.email}</p>
+              </CardContent>
+            </Card>
+          </Reveal>
+          <Reveal index={2}>
+            <Card className="card-hover h-full">
+              <CardHeader>
+                <CardTitle>Merchant boundary</CardTitle>
+                <CardDescription>Ready for integrations</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xl font-semibold">{identity.merchant.name}</p>
+              </CardContent>
+            </Card>
+          </Reveal>
         </div>
         <div className="mt-4 flex flex-col gap-4">
           <StripeIntegration />
         </div>
-      </section>
-    </main>
+    </section>
   );
 }

@@ -17,8 +17,8 @@ export function SiteHeader({
 }>) {
   return (
     <header className={cn("flex items-center justify-between py-7", className)}>
-      <Link href="/" className="text-xl font-extrabold tracking-tighter">
-        voic<span className="text-primary">.</span>
+      <Link href="/" className="text-xl font-bold tracking-tight">
+        voic<span className="text-muted-foreground">.</span>
       </Link>
       <div className="flex items-center gap-2 sm:gap-4">{children}</div>
     </header>

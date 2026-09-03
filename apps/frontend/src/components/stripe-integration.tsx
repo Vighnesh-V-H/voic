@@ -5,6 +5,7 @@ import { useEffect, useState, useTransition } from "react";
 import {
   InfoIcon,
   PlugZapIcon,
+  RotateCwIcon,
   TriangleAlertIcon,
   UnplugIcon,
 } from "lucide-react";
@@ -56,6 +57,26 @@ function formatMoney(amount: number | null | undefined, currency: string | null 
 }
 
 /**
+ * Map a Voic payment status to its pastel badge variant.
+ *
+ * @param status - The Voic-owned payment lifecycle state.
+ * @returns The badge variant carrying the status meaning.
+ */
+function statusBadgeVariant(status: Payment["status"]) {
+  switch (status) {
+    case "COMPLETED":
+      return "success" as const;
+    case "FAILED":
+      return "error" as const;
+    case "PENDING":
+    case "CREATED":
+      return "warning" as const;
+    case "CANCELLED":
+    default:
+      return "secondary" as const;
+  }
+}
+/**
  * Stripe integration component for managing connections, products, prices, and payments.
  *
  * @returns A comprehensive UI for Stripe connection and payment operations.
@@ -83,9 +104,11 @@ export function StripeIntegration() {
 
   /**
    * Load Stripe connection, products, prices, payments, and events from the API.
+   *
+   * @param silent - Whether to suppress the skeleton loading state during background refreshes.
    */
-  async function loadIntegration() {
-    setIsLoading(true);
+  async function loadIntegration(silent = false) {
+    if (!silent) setIsLoading(true);
     setError(null);
     try {
       const nextConnection = await apiRequest<StripeConnection>("/api/v1/stripe/connection");
@@ -109,9 +132,11 @@ export function StripeIntegration() {
       setEvents(nextEvents);
       setSelectedPrice((current) => current || nextPrices[0]?.id || "");
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "The Stripe data could not be loaded.");
+      if (!silent) {
+        setError(requestError instanceof Error ? requestError.message : "The Stripe data could not be loaded.");
+      }
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   }
 
@@ -123,7 +148,23 @@ export function StripeIntegration() {
       window.history.replaceState(null, "", `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}`);
     }
     const loadTask = window.setTimeout(() => void loadIntegration(), 0);
-    return () => window.clearTimeout(loadTask);
+
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadIntegration(true);
+      }
+    }, 4000);
+
+    const onFocus = () => {
+      void loadIntegration(true);
+    };
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      window.clearTimeout(loadTask);
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
   }, []);
 
   /**
@@ -209,30 +250,30 @@ export function StripeIntegration() {
         </Alert>
       ) : null}
       {notice ? (
-        <Alert>
+        <Alert variant="info">
           <InfoIcon />
           <AlertTitle>Stripe update</AlertTitle>
           <AlertDescription>{notice}</AlertDescription>
         </Alert>
       ) : null}
 
-      <Card className="border-transparent bg-foreground text-background">
+      <Card className="card-hover">
         <CardContent className="flex flex-col gap-7 p-6 sm:p-8 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="mb-4 text-xs font-extrabold tracking-[0.14em] text-background/60 uppercase">
+            <p className="mb-4 text-xs font-semibold tracking-[0.14em] text-muted-foreground uppercase">
               Provider connection
             </p>
-            <h2 className="mb-3 max-w-xl text-3xl font-extrabold tracking-tight text-balance sm:text-4xl">
+            <h2 className="font-editorial mb-3 max-w-xl text-3xl text-balance sm:text-4xl">
               Stripe, connected to your signal.
             </h2>
-            <p className="max-w-xl leading-relaxed text-background/70">
+            <p className="max-w-xl leading-relaxed text-muted-foreground">
               Stripe owns your catalog. Voic owns the payment trail that helps
               you act on it.
             </p>
           </div>
           <div className="flex shrink-0 flex-col gap-3.5 lg:items-end">
             {isConnected ? (
-              <Button variant="secondary" type="button" onClick={disconnectStripe} disabled={isPending}>
+              <Button variant="outline" type="button" onClick={disconnectStripe} disabled={isPending}>
                 <UnplugIcon data-icon="inline-start" />
                 Disconnect Stripe
               </Button>
@@ -242,8 +283,14 @@ export function StripeIntegration() {
                 Connect Stripe
               </Button>
             )}
-            <Badge variant={isConnected ? "secondary" : "default"}>
-              <span className="size-1.5 rounded-full bg-chart-2" />
+            <Badge variant={isConnected ? "success" : "secondary"}>
+              <span
+                className={
+                  isConnected
+                    ? "size-1.5 rounded-full bg-pastel-green-text"
+                    : "size-1.5 rounded-full bg-muted-foreground"
+                }
+              />
               {isConnected ? "Connected" : "Not connected"}
             </Badge>
           </div>
@@ -358,7 +405,7 @@ export function StripeIntegration() {
                 </form>
               )}
               {lastPaymentLink ? (
-                <Alert className="mt-4">
+                <Alert variant="info" className="mt-4">
                   <InfoIcon />
                   <AlertTitle>Payment Link ready</AlertTitle>
                   <AlertDescription>
@@ -370,10 +417,10 @@ export function StripeIntegration() {
               ) : null}
               {clientSecret ? (
                 <div className="mt-5 border-t border-border pt-4">
-                  <p className="mb-2 text-xs font-extrabold tracking-[0.13em] text-primary uppercase">
+                  <p className="mb-2 text-xs font-semibold tracking-[0.13em] text-muted-foreground uppercase">
                     PaymentIntent client secret
                   </p>
-                  <code className="block overflow-auto rounded-md bg-muted p-3 font-mono text-xs break-all">
+                  <code className="block overflow-auto rounded-md border border-border bg-muted p-3 font-mono text-xs break-all">
                     {clientSecret}
                   </code>
                   <p className="mt-2 text-sm text-muted-foreground">
@@ -400,11 +447,11 @@ export function StripeIntegration() {
                   <ul className="flex flex-col divide-y divide-border">
                     {payments.slice(0, 5).map((payment) => (
                       <li key={payment.id} className="flex items-center justify-between gap-3.5 py-3.5 first:pt-0 last:pb-0">
-                        <span className="font-semibold">
+                        <span className="font-semibold tabular-nums">
                           {formatMoney(payment.amount, payment.currency)}
                         </span>
                         <span className="flex items-center gap-2 text-right text-sm text-muted-foreground">
-                          <Badge variant="outline">{payment.status}</Badge>
+                          <Badge variant={statusBadgeVariant(payment.status)}>{payment.status}</Badge>
                           {payment.provider_payment_link_id ? (
                             payment.url ? (
                               <a
@@ -431,7 +478,17 @@ export function StripeIntegration() {
             <Card>
               <CardHeader>
                 <CardTitle>Recent events</CardTitle>
-                <CardAction>
+                <CardAction className="flex items-center gap-1.5">
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    title="Refresh events"
+                    aria-label="Refresh events"
+                    onClick={() => void loadIntegration(true)}
+                  >
+                    <RotateCwIcon />
+                  </Button>
                   <Badge variant="secondary">Verified</Badge>
                 </CardAction>
               </CardHeader>

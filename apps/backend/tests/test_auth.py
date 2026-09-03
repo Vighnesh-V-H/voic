@@ -79,3 +79,17 @@ def test_authenticated_user_cannot_read_another_merchants_resource(client):
     response = client.get(f"/api/v1/auth/merchants/{second_merchant_id}")
 
     assert response.status_code == 404
+
+
+def test_logout_clears_session_and_cookie(client):
+    signup(client, "owner@example.com", "Acme Store")
+    client.post(
+        "/api/v1/auth/login",
+        json={"email": "owner@example.com", "password": "correct horse battery"},
+    )
+    assert client.get("/api/v1/auth/me").status_code == 200
+
+    response = client.post("/api/v1/auth/logout")
+
+    assert response.status_code == 204
+    assert client.get("/api/v1/auth/me").status_code == 401

@@ -88,9 +88,10 @@ def payment_for_event(
     connection: ProviderConnection,
     provider_payment_id: str | None,
     metadata: Mapping[str, object],
+    provider_payment_link_id: str | None = None,
 ) -> Payment | None:
     """
-    Locate a payment record matching the event's metadata or provider payment ID.
+    Locate a payment record matching the event's metadata, provider payment ID, or payment link ID.
 
     Args:
         db: Database session for querying payment records.
@@ -98,6 +99,7 @@ def payment_for_event(
         connection: The provider connection associated with the event.
         provider_payment_id: The provider's payment ID from the event.
         metadata: The event metadata containing voic_payment_id.
+        provider_payment_link_id: Optional provider payment link ID from checkout sessions.
 
     Returns:
         The matching Payment record or None if not found.
@@ -114,17 +116,29 @@ def payment_for_event(
         )
         if payment is not None:
             return payment
-    if provider_payment_id is None:
-        return None
-    return db.scalar(
-        select(Payment).where(
-            Payment.provider == "stripe",
-            Payment.provider_payment_id == provider_payment_id,
-            Payment.merchant_id == merchant_id,
-            Payment.provider_connection_id == connection.id,
-            Payment.provider_account_id == connection.provider_account_id,
+    if provider_payment_id is not None:
+        payment = db.scalar(
+            select(Payment).where(
+                Payment.provider == "stripe",
+                Payment.provider_payment_id == provider_payment_id,
+                Payment.merchant_id == merchant_id,
+                Payment.provider_connection_id == connection.id,
+                Payment.provider_account_id == connection.provider_account_id,
+            )
         )
-    )
+        if payment is not None:
+            return payment
+    if provider_payment_link_id is not None:
+        return db.scalar(
+            select(Payment).where(
+                Payment.provider == "stripe",
+                Payment.provider_payment_link_id == provider_payment_link_id,
+                Payment.merchant_id == merchant_id,
+                Payment.provider_connection_id == connection.id,
+                Payment.provider_account_id == connection.provider_account_id,
+            )
+        )
+    return None
 
 
 @router.post("/stripe")
@@ -150,7 +164,14 @@ async def stripe_webhook(
     """
     payload = await request.body()
     signature = request.headers.get("Stripe-Signature", "")
-    if not verify_webhook_signature(payload, signature, settings.stripe_connect_webhook_secret):
+    configured_secrets = [
+        secret.strip()
+        for secret in (settings.stripe_connect_webhook_secret or "").split(",")
+        if secret.strip()
+    ]
+    if not any(
+        verify_webhook_signature(payload, signature, secret) for secret in configured_secrets
+    ):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="WEBHOOK_INVALID_SIGNATURE")
     try:
         event = json.loads(payload)
@@ -161,7 +182,22 @@ async def stripe_webhook(
 
     event_id = event.get("id")
     event_type = event.get("type")
-    account_id = event.get("account")
+    account_id = event.get("account") or event.get("context")
+
+    data = event.get("data")
+    event_object = data.get("object") if isinstance(data, Mapping) else None
+    metadata = event_object.get("metadata") if isinstance(event_object, Mapping) else None
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+
+    if not account_id and isinstance(event_object, Mapping):
+        voic_payment_id = metadata.get("voic_payment_id")
+        if isinstance(voic_payment_id, str):
+            payment_record = db.scalar(
+                select(Payment).where(Payment.id == voic_payment_id)
+            )
+            if payment_record is not None:
+                account_id = payment_record.provider_account_id
+
     if not all(isinstance(value, str) and value for value in (event_id, event_type, account_id)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="WEBHOOK_INVALID_PAYLOAD")
     connection = db.scalar(
@@ -189,15 +225,24 @@ async def stripe_webhook(
     if duplicate is not None:
         return {"status": "duplicate"}
 
-    data = event.get("data")
-    event_object = data.get("object") if isinstance(data, Mapping) else None
     if not isinstance(event_object, Mapping):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="WEBHOOK_INVALID_PAYLOAD")
+
     provider_payment_id = event_object.get("id")
+    payment_link_id = event_object.get("payment_link")
+    if isinstance(event_type, str) and event_type.startswith("checkout.session."):
+        checkout_pi = event_object.get("payment_intent")
+        if isinstance(checkout_pi, str):
+            provider_payment_id = checkout_pi
+        elif isinstance(checkout_pi, Mapping) and isinstance(checkout_pi.get("id"), str):
+            provider_payment_id = checkout_pi["id"]
+
     provider_payment_id = provider_payment_id if isinstance(provider_payment_id, str) else None
-    metadata = event_object.get("metadata")
-    metadata = metadata if isinstance(metadata, Mapping) else {}
+    payment_link_id = payment_link_id if isinstance(payment_link_id, str) else None
+
     amount = event_object.get("amount")
+    if amount is None and isinstance(event_object.get("amount_total"), int):
+        amount = event_object.get("amount_total")
     amount = amount if isinstance(amount, int) else None
     currency = event_object.get("currency")
     currency = currency if isinstance(currency, str) else None
@@ -221,13 +266,43 @@ async def stripe_webhook(
     db.add(payment_event)
 
     if event_type in {"payment_intent.succeeded", "payment_intent.payment_failed"}:
-        payment = payment_for_event(db, connection.merchant_id, connection, provider_payment_id, metadata)
+        payment = payment_for_event(
+            db, connection.merchant_id, connection, provider_payment_id, metadata, payment_link_id
+        )
         if payment is not None:
+            if payment.provider_payment_id is None and provider_payment_id is not None:
+                payment.provider_payment_id = provider_payment_id
             last_event_at = payment.last_event_at
             if last_event_at is not None and last_event_at.tzinfo is None:
                 last_event_at = last_event_at.replace(tzinfo=UTC)
             next_status = "COMPLETED" if event_type.endswith("succeeded") else "FAILED"
             if (
+                last_event_at is None
+                or occurred_at > last_event_at
+                or (occurred_at == last_event_at and next_status == "COMPLETED")
+            ):
+                payment.status = next_status
+                payment.last_event_at = occurred_at
+    elif isinstance(event_type, str) and event_type.startswith("checkout.session."):
+        payment = payment_for_event(
+            db, connection.merchant_id, connection, provider_payment_id, metadata, payment_link_id
+        )
+        if payment is not None:
+            if payment.provider_payment_id is None and provider_payment_id is not None:
+                payment.provider_payment_id = provider_payment_id
+            last_event_at = payment.last_event_at
+            if last_event_at is not None and last_event_at.tzinfo is None:
+                last_event_at = last_event_at.replace(tzinfo=UTC)
+            payment_status = event_object.get("payment_status")
+            checkout_status = event_object.get("status")
+            if event_type == "checkout.session.completed" and (payment_status == "paid" or checkout_status == "complete"):
+                next_status = "COMPLETED"
+            elif event_type in {"checkout.session.async_payment_failed", "checkout.session.expired"}:
+                next_status = "FAILED"
+            else:
+                next_status = None
+
+            if next_status is not None and (
                 last_event_at is None
                 or occurred_at > last_event_at
                 or (occurred_at == last_event_at and next_status == "COMPLETED")

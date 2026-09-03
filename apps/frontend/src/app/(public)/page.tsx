@@ -12,6 +12,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Reveal } from "@/components/reveal";
 import { SiteHeader } from "@/components/site-header";
 
 const SIGNAL_ROWS = [
@@ -36,7 +37,7 @@ const SIGNAL_ROWS = [
  */
 export default function Home() {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 pb-16">
+    <main className="hero-glow mx-auto flex min-h-screen w-full max-w-5xl flex-col px-5 pb-16">
       <SiteHeader>
         <nav className="flex items-center gap-2 sm:gap-4" aria-label="Main navigation">
           <Button
@@ -55,12 +56,12 @@ export default function Home() {
           />
         </nav>
       </SiteHeader>
-      <section className="grid flex-1 items-center gap-11 py-12 lg:grid-cols-[1.15fr_0.85fr] lg:gap-20">
-        <div>
-          <p className="mb-5 text-xs font-extrabold tracking-[0.14em] text-primary uppercase">
+      <section className="grid flex-1 items-center gap-11 py-24 lg:grid-cols-[1.15fr_0.85fr] lg:gap-20">
+        <Reveal>
+          <p className="mb-5 text-xs font-semibold tracking-[0.14em] text-muted-foreground uppercase">
             Payment recovery infrastructure
           </p>
-          <h1 className="mb-6 max-w-2xl text-5xl leading-[0.95] font-extrabold tracking-tighter text-balance sm:text-6xl lg:text-7xl">
+          <h1 className="font-editorial mb-6 max-w-2xl text-5xl text-balance sm:text-6xl lg:text-7xl">
             Turn failed payments into a second chance.
           </h1>
           <p className="max-w-xl text-lg leading-relaxed text-muted-foreground">
@@ -81,34 +82,33 @@ export default function Home() {
               render={<Link href="/auth/login">I already have an account</Link>}
             />
           </div>
-        </div>
-        <Card
-          className="shadow-[18px_18px_0_0_var(--secondary)]"
-          aria-label="Voic integration status preview"
-        >
-          <CardHeader>
-            <CardTitle>Workspace signal</CardTitle>
-            <CardAction>
-              <Badge variant="secondary">Phase 01</Badge>
-            </CardAction>
-          </CardHeader>
-          <CardContent>
-            {SIGNAL_ROWS.map((row, index) => (
-              <div key={row.title}>
-                {index > 0 ? <Separator className="my-4" /> : null}
-                <div className="flex items-center gap-3.5">
-                  <span className="size-2.5 shrink-0 rounded-full bg-primary" />
-                  <div>
-                    <p className="font-semibold">{row.title}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {row.description}
-                    </p>
+        </Reveal>
+        <Reveal index={1}>
+          <Card className="card-hover" aria-label="Voic integration status preview">
+            <CardHeader>
+              <CardTitle>Workspace signal</CardTitle>
+              <CardAction>
+                <Badge variant="info">Phase 01</Badge>
+              </CardAction>
+            </CardHeader>
+            <CardContent>
+              {SIGNAL_ROWS.map((row, index) => (
+                <div key={row.title}>
+                  {index > 0 ? <Separator className="my-4" /> : null}
+                  <div className="flex items-center gap-3.5">
+                    <span className="size-2 shrink-0 rounded-full bg-primary" />
+                    <div>
+                      <p className="font-semibold">{row.title}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {row.description}
+                      </p>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+              ))}
+            </CardContent>
+          </Card>
+        </Reveal>
       </section>
     </main>
   );
