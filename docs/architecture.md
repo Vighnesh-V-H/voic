@@ -1,1809 +1,335 @@
-# Voic — Phase 1 Backend & Frontend Implementation Specification
+# Voic Phase 1 Backend and Frontend Architecture
 
-## 1. Project Overview
+## 1. Objective
 
-Build **Voic**, a SaaS application that will eventually use a Hinglish voice agent to recover failed customer payments for merchants.
-
-The eventual product flow is:
-
-```text
-Customer attempts payment
-        ↓
-Payment fails
-        ↓
-Voic receives payment failure
-        ↓
-Voic determines whether the failure is eligible for recovery
-        ↓
-Voic calls the customer using a voice agent
-        ↓
-Agent understands what went wrong
-        ↓
-If customer agrees, Voic sends a payment/checkout link
-        ↓
-Customer completes payment
-        ↓
-Voic detects successful payment
-        ↓
-Voic attributes the payment to the recovery attempt
-        ↓
-Merchant sees recovered money in dashboard
-```
-
-However, **this specification covers only Phase 1**.
-
-### Phase 1 objective
-
-Prove that the fundamental payment-provider integration works:
+Voic is a SaaS application that connects a merchant's payment systems to a trusted foundation for future payment recovery. Phase 1 establishes the payment-provider foundation only:
 
 ```text
 Merchant signs up
-      ↓
-Merchant connects Razorpay through OAuth
-      ↓
-Voic securely stores the connection
-      ↓
-Voic receives Razorpay webhook events
-      ↓
-Voic verifies the webhook
-      ↓
-Voic identifies the correct merchant
-      ↓
-Voic persists the payment event
-      ↓
-Developer can inspect the event in the backend/database
+      |
+      v
+Merchant connects an existing Stripe account
+      |
+      v
+Voic stores the provider connection
+      |
+      v
+Voic reads Stripe products and prices
+      |
+      v
+Voic creates Payments and Payment Links
+      |
+      v
+Stripe sends Connect webhook events
+      |
+      v
+Voic verifies, deduplicates, and persists payment events
+      |
+      v
+Voic synchronizes its payment status
 ```
 
-We are intentionally **not building the voice agent yet**.
+The complete Stripe integration contract is documented in `docs/stripe-connect.md`. That document is the source of truth for Stripe endpoint behavior. This architecture document defines the boundaries around it.
 
-Do not introduce ElevenLabs, Vobiz, LangGraph, telephony providers, email delivery, or AI orchestration in this phase.
+The voice agent, recovery rules, and production payments are later phases.
 
----
+## 2. Technology
 
-# 2. Technology Stack
+### Frontend
 
-## Frontend
+- Next.js
+- TypeScript
+- App Router
+- Server and client components where appropriate
 
-Use:
+The frontend provides authentication, merchant onboarding, provider connection, catalog selection, payment and Payment Link actions, connection status, and recent payment-event visibility. It never receives platform secrets, OAuth credentials, webhook secrets, or raw webhook payloads.
 
-* Next.js
-* TypeScript
-* App Router
-* Server/client components where appropriate
-* Standard modern React patterns
+### Backend
 
-The frontend is responsible for:
+- Python
+- FastAPI
+- Pydantic
+- SQLAlchemy
+- PostgreSQL
+- Alembic
 
-* Authentication UI
-* Merchant onboarding UI
-* Payment-provider connection UI
-* OAuth initiation
-* OAuth success/failure states
-* Basic connection status
-* Basic developer/debug visibility if useful
+Provider-specific behavior stays behind a provider abstraction. API routes depend on the abstraction rather than the Stripe SDK directly.
 
-Do not put payment-provider secrets or OAuth client secrets in the browser.
-
----
-
-## Backend
-
-Use:
-
-* Python
-* FastAPI
-* Pydantic
-* SQLAlchemy
-* PostgreSQL
-* Alembic for migrations
-
-Recommended project structure:
-
-```text
-backend/
-├── app/
-│   ├── main.py
-│   │
-│   ├── api/
-│   │   ├── auth.py
-│   │   ├── merchants.py
-│   │   ├── integrations.py
-│   │   └── webhooks.py
-│   │
-│   ├── core/
-│   │   ├── config.py
-│   │   ├── security.py
-│   │   └── database.py
-│   │
-│   ├── models/
-│   │   ├── user.py
-│   │   ├── merchant.py
-│   │   ├── provider_connection.py
-│   │   └── payment_event.py
-│   │
-│   ├── schemas/
-│   │   ├── auth.py
-│   │   ├── merchant.py
-│   │   ├── integration.py
-│   │   └── webhook.py
-│   │
-│   ├── services/
-│   │   ├── auth_service.py
-│   │   ├── merchant_service.py
-│   │   └── providers/
-│   │       ├── base.py
-│   │       └── razorpay.py
-│   │
-│   └── workers/
-│       └── ...
-│
-├── migrations/
-├── tests/
-├── pyproject.toml
-└── .env.example
-```
-
-The exact structure can change if there is a better clean architecture, but provider-specific logic must not leak throughout the application.
-
----
-
-# 3. Important Architectural Principle
-
-Voic must own its own internal state.
-
-The payment provider is an external system.
-
-Do not make the frontend or future voice agent directly responsible for interpreting the provider's state.
-
-The desired architecture is:
-
-```text
-                External Systems
-                     │
-                     ▼
-             Payment Provider
-                     │
-              OAuth / Webhooks
-                     │
-                     ▼
-              Voic Backend
-                     │
-          ┌──────────┴──────────┐
-          │                     │
-      PostgreSQL            Services
-          │                     │
-          └──────────┬──────────┘
-                     │
-                     ▼
-                  Voic
-```
-
-The future voice agent will consume Voic-owned context rather than querying Razorpay directly.
-
----
-
-# 4. Core Domain Model
-
-The minimum domain model for Phase 1 is:
+## 3. Domain Model
 
 ```text
 User
-  │
-  ▼
+  |
+  v
 Merchant
-  │
-  ▼
+  |
+  v
 ProviderConnection
-  │
-  ▼
-PaymentEvent
+  |
+  +--> Stripe products and prices (owned by Stripe)
+  +--> Payment
+          |
+          +--> Payment events
+          +--> Payment Link (optional)
 ```
 
-## User
+### User
 
-Represents a person who can log into Voic.
+A person who can sign in to Voic. In Phase 1, each user belongs to one merchant. Passwords are hashed when password authentication is used.
+
+### Merchant
+
+A business using Voic. A merchant owns its provider connections, payments, payment events, and future recovery activity. A merchant is not equivalent to a user or a Stripe account.
+
+### Provider connection
+
+An authorization relationship in which a merchant has granted Voic access to an external payment provider.
 
 Minimum fields:
 
 ```text
-id
-email
-password_hash OR external-auth identifier
-created_at
-updated_at
-```
-
-Do not store plaintext passwords.
-
----
-
-# 5. Merchant
-
-A merchant is the business using Voic.
-
-Minimum fields:
-
-```text
-id
-name
-created_at
-updated_at
-```
-
-A user should be associated with a merchant.
-
-For Phase 1, it is acceptable to support:
-
-```text
-one user → one merchant
-```
-
-But design the database so that this can later become:
-
-```text
-merchant
-   ├── users
-   ├── provider connections
-   ├── recovery cases
-   └── settings
-```
-
-Do not make the merchant equivalent to the user.
-
----
-
-# 6. ProviderConnection
-
-This is one of the most important objects in the system.
-
-It represents:
-
-> "Merchant X has authorized Voic to access Provider Y."
-
-Example:
-
-```text
-ProviderConnection
-------------------
 id
 merchant_id
 provider
 provider_account_id
-access_token_encrypted
-refresh_token_encrypted
-access_token_expires_at
-scopes
+mode
+scope
 status
 created_at
 updated_at
 ```
 
-For Razorpay:
+For Stripe, `provider_account_id` is the connected account ID returned as `stripe_user_id`. There is at most one active Stripe provider connection per merchant.
+
+### Payment
+
+A Voic-owned attempt to collect money for a merchant. It stores the Stripe PaymentIntent ID or Payment Link ID, the selected Stripe price ID, amount, currency, and current Voic payment status.
+
+Payment statuses are:
 
 ```text
-provider = "razorpay"
-provider_account_id = razorpay_account_id
+CREATED
+PENDING
+COMPLETED
+FAILED
+CANCELLED
 ```
 
-Razorpay's OAuth flow returns a `razorpay_account_id`, which identifies the sub-merchant account that granted authorization.
+### Payment event
 
----
+A provider-originated record that tells Voic a payment-related event occurred. Events are immutable, retain the verified raw payload for restricted debugging, and have a uniqueness constraint on `(provider, provider_event_id)`.
 
-# 7. Token Security
+## 4. Stripe Provider Connection
 
-OAuth credentials are sensitive secrets.
-
-Never:
-
-* expose access tokens to Next.js client code
-* return tokens from API responses
-* put tokens in browser localStorage
-* log tokens
-* log authorization codes
-* commit tokens to Git
-* store plaintext tokens if secure encryption-at-rest is available
-
-At minimum:
+Voic uses Stripe Standard OAuth to connect an existing Stripe account.
 
 ```text
-Database
-    ↓
-Encrypted token storage
+Authenticated merchant
+      |
+      v
+Voic creates a cryptographically random state
+      |
+      v
+Stripe authorization page
+      |
+      v
+Voic validates state and authorization code
+      |
+      v
+Voic stores stripe_user_id and connection metadata
 ```
 
-Use application-level encryption for:
+The backend owns the OAuth flow. State is stored server-side, bound to the authenticated user and merchant, expires, and is single-use. A callback with a missing, expired, reused, or mismatched state is rejected before any token exchange.
 
-```text
-access_token
-refresh_token
-```
+Stripe's current API guidance recommends using the platform secret key with the connected account ID in the `Stripe-Account` header. Voic therefore stores the connected account ID, mode, granted scope, and connection status, but does not persist or return deprecated OAuth access or refresh tokens.
 
-The encryption key must come from an environment/secret-management system and must not be stored in PostgreSQL.
+The platform secret key is server-only and must match the Stripe test mode used for the initial implementation. Reconnection updates the existing merchant/provider connection. Deauthorization or disconnect marks the connection unusable while preserving historical payments and payment events.
 
-For local development, environment variables are acceptable.
+## 5. Stripe Catalog
 
-Example:
+Stripe is the catalog source of truth. Merchants create and manage products and prices in Stripe. Voic retrieves products and prices when needed, exposes a read-only selection view, and stores only the Stripe IDs required to associate a payment.
 
-```env
-DATABASE_URL=...
-JWT_SECRET=...
-RAZORPAY_CLIENT_ID=...
-RAZORPAY_CLIENT_SECRET=...
-TOKEN_ENCRYPTION_KEY=...
-```
+Voic does not create or duplicate Stripe products in Phase 1.
 
-Never commit `.env`.
+## 6. Payment and Payment Link Flow
 
-Provide:
+All payment creation is scoped to the authenticated merchant's active provider connection. The backend validates that a requested Stripe price belongs to that connected account before creating a payment resource.
 
-```text
-.env.example
-```
+### PaymentIntent
 
-containing variable names only.
+`POST /api/v1/payments` creates a Stripe PaymentIntent for the selected one-time price and quantity. The PaymentIntent starts in a non-terminal Voic status and includes a non-sensitive Voic payment ID in Stripe metadata. The response may include Stripe's client secret for client-side confirmation; it must never include the platform secret or OAuth credentials.
 
----
+### Payment Link
 
-# 8. Razorpay OAuth
+`POST /api/v1/payment-links` creates a Stripe-hosted Payment Link using an existing one-time Stripe price and quantity. The request includes the Voic payment ID in both Payment Link metadata and `payment_intent_data.metadata`, allowing the resulting PaymentIntent webhook to resolve the local payment. Voic stores and returns the hosted URL.
 
-Razorpay OAuth must be implemented on the backend.
+The frontend and any future voice agent consume the backend response. They never manufacture Stripe URLs.
 
-Razorpay's current partner OAuth documentation describes an authorization-code flow:
+## 7. Webhook Ingestion
 
-```text
-Voic
-  ↓
-Razorpay authorization page
-  ↓
-Merchant authorizes Voic
-  ↓
-Razorpay redirects to Voic callback
-  ↓
-Voic receives authorization code
-  ↓
-Voic exchanges code server-side
-  ↓
-access_token
-refresh_token
-razorpay_account_id
-  ↓
-store securely
-```
-
-Razorpay requires technology partners to register an application and use OAuth for accessing sub-merchant resources.
-
----
-
-# 9. OAuth State / CSRF Protection
-
-The OAuth flow MUST use a cryptographically random `state`.
-
-When the merchant clicks:
-
-```text
-Connect Razorpay
-```
-
-the backend must:
-
-1. Generate a random state.
-2. Associate it with the currently authenticated merchant/user.
-3. Store it server-side.
-4. Redirect the user to Razorpay.
-5. Receive the callback.
-6. Validate the returned state.
-7. Reject the callback if the state does not match.
-8. Only then exchange the authorization code.
-
-Razorpay explicitly documents the `state` mechanism for CSRF protection.
-
-Do not trust the OAuth callback simply because it contains a valid-looking `code`.
-
----
-
-# 10. OAuth API Design
-
-Create an endpoint similar to:
+Voic exposes:
 
 ```http
-GET /api/integrations/razorpay/connect
+POST /api/v1/webhooks/stripe
 ```
 
-Purpose:
+This is a public endpoint protected by Stripe signature verification. It is configured once as a platform-level Connect webhook with `connect=true` and receives events for all connected accounts. The signing secret is deployment-managed through `STRIPE_CONNECT_WEBHOOK_SECRET`; it is not stored per merchant.
 
-Return or perform the redirect to Razorpay authorization.
-
-Then:
-
-```http
-GET /api/integrations/razorpay/callback
-```
-
-Purpose:
-
-Handle the OAuth callback.
-
-After successful OAuth:
+Processing order:
 
 ```text
-authorization code
-        ↓
-backend token exchange
-        ↓
-encrypted token storage
-        ↓
-ProviderConnection
-```
-
-The frontend should ultimately see something like:
-
-```json
-{
-  "provider": "razorpay",
-  "connected": true
-}
-```
-
-Never:
-
-```json
-{
-  "access_token": "...",
-  "refresh_token": "..."
-}
-```
-
----
-
-# 11. OAuth Scopes
-
-For Phase 1, request only the scopes genuinely required for the integration.
-
-Razorpay documents `read_only` and `read_write` scopes, with read/write allowing creation and modification of resources.
-
-Do not request broad write permissions simply because they may be useful later.
-
-Initially, the goal is:
-
-```text
-read payment information
-receive payment events
-identify the merchant account
-```
-
-If a later phase needs write permissions—for example creating payment links—add that requirement explicitly.
-
----
-
-# 12. Refresh Token Handling
-
-The backend must treat access tokens as expiring credentials.
-
-Razorpay currently documents access tokens as expiring after 90 days and provides a refresh-token flow that returns a new access token and refresh token. The old refresh token becomes invalid when the new pair is issued.
-
-Implement a provider service abstraction:
-
-```python
-class PaymentProvider:
-    async def get_valid_access_token(
-        self,
-        connection: ProviderConnection
-    ) -> str:
-        ...
-```
-
-The service should:
-
-1. Check whether the access token is still valid.
-2. Return it if valid.
-3. Refresh if required.
-4. Persist the new access token.
-5. Persist the new refresh token.
-6. Update expiry.
-7. Return the new access token.
-
-Do not implement token refresh logic directly inside random API routes.
-
----
-
-# 13. Provider Abstraction
-
-Even though Phase 1 initially targets Razorpay, the architecture should support multiple providers.
-
-Create an interface:
-
-```python
-class PaymentProvider(ABC):
-
-    async def exchange_oauth_code(...):
-        ...
-
-    async def refresh_access_token(...):
-        ...
-
-    async def get_account(...):
-        ...
-
-    async def create_webhook(...):
-        ...
-
-    async def normalize_webhook(...):
-        ...
-```
-
-Then:
-
-```text
-PaymentProvider
-      │
-      ├── RazorpayProvider
-      │
-      └── PolarProvider (future)
-```
-
-Do not build Polar yet.
-
-But do not hard-code the entire backend around Razorpay either.
-
----
-
-# 14. Webhook Architecture
-
-The second major Phase 1 feature is webhook ingestion.
-
-The basic flow:
-
-```text
-Razorpay
-   │
-   │ HTTP POST
-   ▼
-Voic webhook endpoint
-   │
-   ├── verify signature
-   ├── identify event
-   ├── identify merchant
-   ├── deduplicate
-   └── persist event
-```
-
-Razorpay sends webhook events asynchronously to the configured URL. Their documentation specifically recommends webhooks for automation and notes that webhook events can be duplicated or arrive out of order.
-
----
-
-# 15. Webhook Endpoint
-
-Create:
-
-```http
-POST /api/webhooks/razorpay
-```
-
-This endpoint is public because Razorpay must be able to reach it.
-
-However, it must not be unauthenticated in the security sense.
-
-The request must be verified using the Razorpay webhook signature.
-
-Razorpay signs webhook payloads using HMAC-SHA256 and sends the signature in:
-
-```text
-X-Razorpay-Signature
-```
-
-The signature must be calculated against the **raw request body**. Do not parse and then reserialize the JSON before signature verification.
-
----
-
-# 16. Webhook Verification
-
-Correct sequence:
-
-```text
-HTTP request
-     ↓
 Read raw request body
-     ↓
-Read X-Razorpay-Signature
-     ↓
-Determine appropriate webhook secret
-     ↓
-HMAC-SHA256(raw_body, webhook_secret)
-     ↓
-Compare securely
-     ↓
-Only then parse JSON
+      |
+      v
+Read Stripe-Signature header
+      |
+      v
+Verify signature with the Connect endpoint secret
+      |
+      v
+Parse the event
+      |
+      v
+Resolve event.account to exactly one ProviderConnection
+      |
+      v
+Deduplicate provider_event_id
+      |
+      v
+Persist PaymentEvent
+      |
+      v
+Update the matching Payment when supported
+      |
+      v
+Return 2xx quickly
 ```
 
-Never:
+Stripe's event `account` field is the authoritative merchant boundary. Customer email, phone, amount, description, frontend data, and arbitrary untrusted values are never used to select a merchant.
+
+Phase 1 handles at least:
+
+- `payment_intent.succeeded` -> `COMPLETED`
+- `payment_intent.payment_failed` -> `FAILED`
+- `account.application.deauthorized` -> mark the matching provider connection disconnected
+
+Events may be duplicated or arrive out of order. Each event is persisted independently and no business logic assumes delivery order. Unknown connected accounts, invalid payloads, invalid signatures, and duplicate events have explicit outcomes and never cross merchant boundaries.
+
+## 8. API Surface
+
+Protected routes resolve every request as:
 
 ```text
-parse JSON
-   ↓
-serialize JSON
-   ↓
-verify signature
+authenticated user -> merchant -> merchant-owned resource
 ```
 
-Razorpay explicitly warns against parsing/casting the body before validation.
+Stripe connection:
 
----
-
-# 17. Webhook Secrets
-
-Each provider connection/webhook configuration may require a secret.
-
-Do not use:
-
-```text
-RAZORPAY_CLIENT_SECRET
+```http
+GET /api/v1/stripe/connect
+GET /api/v1/stripe/callback
+DELETE /api/v1/stripe/connection
 ```
 
-as the webhook secret.
+Catalog:
 
-They are different credentials.
-
-Store webhook secrets securely/encrypted.
-
-Example:
-
-```text
-ProviderConnection
-        │
-        └── webhook_secret_encrypted
+```http
+GET /api/v1/stripe/products
+GET /api/v1/stripe/products/{id}
 ```
 
-If the architecture later supports multiple webhook endpoints per merchant, introduce a separate `WebhookEndpoint` model.
+Payments:
 
-For Phase 1, keep the model simple unless the provider requires otherwise.
-
----
-
-# 18. Merchant Identification
-
-This is a critical invariant.
-
-Every payment event received by Voic must be mapped to exactly one merchant.
-
-Conceptually:
-
-```text
-Razorpay event
-      ↓
-Razorpay account identity
-      ↓
-ProviderConnection
-      ↓
-merchant_id
+```http
+POST /api/v1/payments
+GET /api/v1/payments/{id}
 ```
 
-Never identify the merchant from:
+Payment Links:
 
-* customer email
-* customer phone
-* payment amount
-* payment description
-* arbitrary metadata
-* frontend-provided values
-
-The provider account identity must be the authoritative boundary.
-
-Razorpay's partner OAuth model exposes the sub-merchant account ID, and its partner webhook APIs are associated with a specific `account_id`.
-
----
-
-# 19. Webhook Idempotency
-
-Webhook delivery is not guaranteed to happen exactly once.
-
-Razorpay documents that duplicate webhook deliveries can occur and provides:
-
-```text
-x-razorpay-event-id
+```http
+POST /api/v1/payment-links
+GET /api/v1/payment-links/{id}
 ```
-
-as a unique event identifier.
-
-Therefore the database must have a uniqueness constraint such as:
-
-```text
-(provider, provider_event_id)
-```
-
-or, if provider semantics require it:
-
-```text
-provider_event_id
-```
-
-Do not process the same event twice.
-
-Example:
-
-```text
-Event received
-     ↓
-Does event_id already exist?
-     │
-   ┌─┴─┐
-  YES  NO
-   │    │
- return persist
-```
-
----
-
-# 20. PaymentEvent Model
-
-Create a persistent event table.
-
-Suggested schema:
-
-```text
-PaymentEvent
--------------------------
-id
-merchant_id
-provider
-provider_event_id
-event_type
-provider_payment_id
-amount
-currency
-customer_reference
-raw_payload
-occurred_at
-received_at
-processed_at
-created_at
-```
-
-For Phase 1, `raw_payload` is useful for debugging.
-
-However:
-
-* treat it as sensitive data
-* restrict access
-* never expose it through normal frontend APIs
-* do not log sensitive payment information unnecessarily
-
----
-
-# 21. Do Not Assume the Webhook Contains Everything
-
-A webhook tells Voic that an event occurred and includes the provider-defined event payload.
-
-Do not assume every piece of customer information will always be present.
-
-The correct architecture is:
-
-```text
-Webhook
-   ↓
-Event says payment X failed
-   ↓
-Normalize known information
-   ↓
-If additional information is required:
-   ↓
-Use provider API with merchant's OAuth connection
-   ↓
-Fetch additional resource data
-```
-
-The provider integration layer owns this logic.
-
-For example:
-
-```python
-async def get_payment_context(payment_id, connection):
-    ...
-```
-
-The eventual normalized context might contain:
-
-```text
-payment_id
-merchant_id
-customer_id
-customer_name
-customer_email
-customer_phone
-amount
-currency
-failure_reason
-```
-
-But only populate fields that are legitimately available from the provider.
-
-Do not fabricate missing information.
-
----
-
-# 22. Payment Failure Event
-
-The first business event we care about is:
-
-```text
-payment.failed
-```
-
-Razorpay documents `payment.failed` as a payment webhook event.
-
-For Phase 1:
-
-**Do not trigger a phone call when this event arrives.**
-
-Instead:
-
-```text
-payment.failed
-      ↓
-persist event
-      ↓
-log successful processing
-```
-
-Later this will become:
-
-```text
-payment.failed
-      ↓
-eligibility engine
-      ↓
-RecoveryCase
-      ↓
-call
-```
-
----
-
-# 23. Intentional Test Failure
-
-The developer must be able to intentionally generate a payment failure in Razorpay Test Mode.
-
-Razorpay provides webhook testing in Test Mode, and the webhook payload structure is intended to match the corresponding live-mode structure.
-
-The acceptance test is:
-
-```text
-Create/test payment
-        ↓
-Force failure
-        ↓
-Razorpay emits payment.failed
-        ↓
-Voic receives webhook
-        ↓
-Voic verifies signature
-        ↓
-Voic identifies merchant
-        ↓
-Voic stores PaymentEvent
-        ↓
-Developer can inspect database
-```
-
-Do not use real customer data during development.
-
----
-
-# 24. Webhook Processing Strategy
-
-The webhook endpoint should respond quickly.
-
-Recommended:
-
-```text
-HTTP POST
-   ↓
-verify signature
-   ↓
-persist event
-   ↓
-return 2xx
-```
-
-Heavy processing should eventually happen asynchronously.
-
-For Phase 1, simple synchronous persistence is acceptable.
-
-Do not perform expensive provider API calls, AI calls, email sending, or phone calls inside the webhook request.
-
-Razorpay expects successful webhook responses within a short response window and retries failed deliveries.
-
----
-
-# 25. Webhook Events May Arrive Out of Order
-
-Do not build business logic assuming:
-
-```text
-payment.authorized
-    ↓
-payment.captured
-```
-
-will always arrive in that exact order.
-
-Razorpay explicitly documents that webhook events may arrive out of order.
-
-For Phase 1 this mostly means:
-
-* persist events independently
-* don't assume ordering
-* don't mutate state based solely on event arrival order
-
----
-
-# 26. Webhook Configuration
-
-Voic needs a webhook URL that Razorpay can reach.
-
-Example:
-
-```text
-https://api.voic.example.com/api/webhooks/razorpay
-```
-
-Localhost cannot be used directly as a public webhook endpoint. Razorpay documents that webhook URLs must be publicly reachable and recommends HTTPS.
-
-For local development, use a suitable public HTTPS development/staging endpoint or an approved tunneling solution.
-
-Do not build the system around a permanent local tunnel.
-
----
-
-# 27. Razorpay Webhook Creation
-
-Where supported by the Razorpay partner integration, Voic should create/configure the merchant-specific webhook through Razorpay's API rather than asking every merchant to manually configure it.
-
-Razorpay documents a partner webhook creation endpoint:
-
-```text
-POST /v2/accounts/:account_id/webhooks
-```
-
-with the merchant account ID, webhook URL, secret, and selected events.
-
-For Phase 1, configure at minimum the event required to observe payment failures:
-
-```text
-payment.failed
-```
-
-Additional events can be added later when the recovery lifecycle requires them.
-
----
-
-# 28. Important: Do Not Build Recovery Logic Yet
-
-Do NOT implement:
-
-```text
-if payment.failed:
-    call customer
-```
-
-Instead:
-
-```text
-if payment.failed:
-    persist PaymentEvent
-```
-
-The future business rule will be something like:
-
-```text
-PaymentFailure
-      ↓
-Eligibility Rules
-      ↓
-RecoveryCase
-```
-
-The eventual eligibility rules may include:
-
-```text
-amount >= merchant.minimum_recovery_amount
-AND customer has phone
-AND failure type is recoverable
-AND payment isn't already recovered
-AND customer hasn't exceeded call limit
-AND merchant allows calls at this time
-AND other merchant-configured criteria
-```
-
-But those rules belong to a later phase.
-
----
-
-# 29. Future Recovery Architecture
-
-The architecture should eventually evolve into:
-
-```text
-PaymentEvent
-     ↓
-Eligibility Engine
-     ↓
-RecoveryCase
-     ↓
-Call Orchestrator
-     ↓
-Voice Agent
-     ↓
-Conversation Outcome
-     ↓
-Optional Checkout Link
-     ↓
-Customer Payment
-     ↓
-Payment Event
-     ↓
-Attribution
-     ↓
-Recovered
-```
-
-The voice agent must not become the system of record.
-
----
-
-# 30. Future Voice Agent Context
-
-Eventually, the voice agent will receive a Voic-owned context object.
-
-Example:
-
-```json
-{
-  "recovery_case_id": "rc_123",
-  "customer": {
-    "name": "Rahul",
-    "phone": "+91..."
-  },
-  "payment": {
-    "amount": 5000,
-    "currency": "INR"
-  },
-  "failure": {
-    "category": "payment_failed"
-  }
-}
-```
-
-The agent should NOT receive:
-
-* card numbers
-* CVV
-* bank credentials
-* UPI PIN
-* passwords
-* OTPs
-* other sensitive authentication information
-
-The call should never ask the customer to disclose such information.
-
-This is a fundamental product/security constraint.
-
----
-
-# 31. Future Payment Recovery
-
-The eventual recovery flow is:
-
-```text
-Customer:
-"I had some problem making the payment."
-
-Agent:
-"Would you like me to send you a fresh payment link?"
-
-Customer:
-"Yes."
-
-Agent
-   ↓
-Voic backend
-   ↓
-generate/retrieve legitimate checkout/payment link
-   ↓
-email customer
-```
-
-The LLM should not directly manufacture payment URLs.
-
-The backend/payment-provider integration should own payment-link creation.
-
----
-
-# 32. Future Recovery Attribution
-
-Eventually Voic must be able to answer:
-
-> "Why does Voic consider this payment recovered because of this call?"
-
-Therefore future models should establish a deterministic chain:
-
-```text
-PaymentFailure
-      ↓
-RecoveryCase
-      ↓
-Call
-      ↓
-CheckoutLink
-      ↓
-SuccessfulPayment
-```
-
-The LLM must not decide whether money was recovered.
-
-Payment recovery should be established using provider-side payment evidence and Voic's own identifiers/relationships.
-
----
-
-# 33. Authentication
-
-Implement basic secure merchant authentication.
-
-The exact authentication mechanism can be selected by the implementation agent, but it must satisfy:
-
-* secure password hashing if passwords are used
-* secure session/token handling
-* authenticated backend endpoints
-* merchant-level authorization
-* no cross-merchant data access
-
-Every protected request must resolve to:
-
-```text
-authenticated user
-        ↓
-merchant
-        ↓
-resource
-```
-
-Never trust a `merchant_id` supplied by the frontend without checking ownership.
-
----
-
-# 34. Multi-Tenant Security
-
-This is critical.
-
-Every merchant-owned database query must be scoped by merchant.
-
-Bad:
-
-```python
-PaymentEvent.get(id=event_id)
-```
-
-Better:
-
-```python
-PaymentEvent.get(
-    id=event_id,
-    merchant_id=current_merchant.id
-)
-```
-
-The backend must enforce tenant isolation.
-
-Merchant A must never be able to retrieve Merchant B's:
-
-* provider connections
-* payment events
-* customer data
-* webhook payloads
-* future recovery cases
-* future call records
-
----
-
-# 35. Frontend Pages
-
-Create a minimal frontend.
-
-### `/`
-
-Landing/login routing.
-
-### `/login`
-
-Login page.
-
-### `/signup`
-
-Merchant signup.
-
-### `/dashboard`
-
-Basic merchant dashboard.
-
-For Phase 1:
-
-```text
-Connected Providers
--------------------
-
-Razorpay
-Status: Connected
-
-Recent Payment Events
----------------------
-
-payment.failed
-₹5,000
-Received: ...
-```
-
-This does not need to be a polished analytics dashboard.
-
-Its purpose is to demonstrate that the integration works.
-
----
-
-# 36. Integration UI
-
-Create a page such as:
-
-```text
-/settings/integrations
-```
-
-Display:
-
-```text
-Payment Providers
-
-Razorpay
-[ Connect Razorpay ]
-
-Status:
-Connected
-```
-
-After connection:
-
-```text
-Razorpay
-Connected
-
-Account:
-Connected Razorpay account
 
 Webhook:
-Configured
 
-Last webhook:
-2 minutes ago
+```http
+POST /api/v1/webhooks/stripe
 ```
 
-Do not expose:
+Responses expose provider IDs, status, amount, currency, and hosted URLs where applicable. They never expose platform secrets, OAuth credentials, webhook secrets, or unrestricted raw webhook payloads.
 
-* access token
-* refresh token
-* webhook secret
-* OAuth client secret
+## 9. Security and Tenant Isolation
 
----
+Voic uses server-validated opaque HTTP-only sessions. The backend resolves the session to a user and merchant on every protected request. Browser code cannot read the session token.
 
-# 37. Developer Debugging
+Every merchant-owned query is scoped by the authenticated merchant. Merchant A cannot retrieve Merchant B's provider connections, payments, payment events, customer data, or raw webhook payloads.
 
-During Phase 1, provide a way for the developer to verify integration health.
+Credentials and sensitive data follow these rules:
 
-Possible dashboard:
+- Platform secret and webhook secret come from environment or secret management.
+- Secrets are never committed, logged, or returned to the frontend.
+- Raw webhook payloads are restricted to developer debugging and are not normal merchant API data.
+- Payment metadata contains only non-sensitive identifiers.
+- Test mode uses synthetic data only.
 
-```text
-Integration Health
+## 10. Frontend
 
-Razorpay
---------------------
-OAuth:          ✓
-Account:        ✓
-Webhook:        ✓
-Signature:      ✓
-Last Event:     payment.failed
-Last Event At:  ...
-```
+The minimal frontend includes:
 
-And:
+- `/login`
+- `/signup`
+- `/dashboard`
+- `/settings/integrations`
 
-```text
-Recent Events
+The integration view shows whether Stripe is connected, the connected account identifier in a safe display form, catalog products/prices, created payments and Payment Links, and recent normalized payment events. It does not display secrets or full raw payloads.
 
-ID             Type             Payment ID
-evt_xxx        payment.failed   pay_xxx
-```
+## 11. Testing
 
-Do not display full raw webhook payload to normal merchant users.
+Automated tests exercise external behavior at the API boundary using a fake provider or mocked Stripe adapter. They cover:
 
-If a developer-only debug endpoint is implemented, protect it appropriately.
+- Signup, login, invalid credentials, and merchant resolution
+- OAuth state generation, expiry, single-use validation, and callback handling
+- Connected account storage without credential leakage
+- Product and price retrieval scoped to the connected account
+- PaymentIntent and Payment Link creation from existing prices
+- Metadata-based payment correlation
+- Valid and invalid raw-body webhook signatures
+- Malformed payloads and unknown connected accounts
+- Duplicate event idempotency and out-of-order event persistence
+- Success and failure payment-status synchronization
+- Deauthorization and disconnect preservation of historical data
+- Cross-merchant access rejection
 
----
+Manual acceptance runs entirely in Stripe Test Mode. The Stripe CLI or another temporary public HTTPS endpoint may forward Connect events to local development. No production credentials or real payments are required.
 
-# 38. Database Constraints
+## 12. Out of Scope
 
-At minimum:
+Phase 1 does not include:
 
-### User
+- Product creation from Voic
+- Subscriptions, recurring prices, refunds, disputes, payouts, or chargebacks
+- Production credentials or live payments
+- Voice agents, telephony, STT, TTS, LLMs, or LangGraph
+- RecoveryCase, eligibility, calling, email delivery, or recovery attribution
+- Analytics beyond basic integration health and recent payment events
 
-```text
-email UNIQUE
-```
+## 13. Definition of Done
 
-### Merchant
+Phase 1 is complete when:
 
-appropriate ownership relationship.
+- The Next.js frontend, FastAPI backend, PostgreSQL database, and migrations run.
+- A user and merchant can sign up and authenticate.
+- An existing Stripe Test Mode account can connect through Standard OAuth with CSRF-protected state.
+- The connected Stripe account ID and connection metadata are stored without exposing credentials.
+- Products and prices can be retrieved from the connected account.
+- A PaymentIntent and a Payment Link can be created from an existing one-time price.
+- The centralized Connect webhook verifies the raw request body.
+- The event's connected account maps to exactly one merchant.
+- Duplicate events are idempotent and raw verified payloads are retained securely.
+- `payment_intent.succeeded` and `payment_intent.payment_failed` synchronize Payment status.
+- Merchant isolation is covered by automated tests.
+- A Stripe Test Mode payment failure can be forwarded to Voic and inspected in the database or dashboard.
 
-### ProviderConnection
-
-Prefer:
-
-```text
-UNIQUE(merchant_id, provider)
-```
-
-if only one connection per provider is supported.
-
-### PaymentEvent
-
-```text
-UNIQUE(provider, provider_event_id)
-```
-
-This is essential for webhook idempotency.
-
----
-
-# 39. Logging Requirements
-
-Logs should help diagnose the integration without leaking secrets.
-
-Good:
-
-```text
-Razorpay OAuth completed
-merchant_id=merch_123
-provider_account_id=acc_xxx
-```
-
-Good:
-
-```text
-Received Razorpay webhook
-event_type=payment.failed
-event_id=evt_xxx
-merchant_id=merch_123
-```
-
-Bad:
-
-```text
-access_token=ey...
-refresh_token=...
-webhook_secret=...
-```
-
-Never log credentials.
-
-Be cautious about logging:
-
-* customer phone
-* customer email
-* payment metadata
-* full webhook payload
-
----
-
-# 40. Error Handling
-
-OAuth failures should be represented cleanly.
-
-Examples:
-
-```text
-OAUTH_STATE_MISMATCH
-OAUTH_ACCESS_DENIED
-OAUTH_TOKEN_EXCHANGE_FAILED
-OAUTH_PROVIDER_ERROR
-```
-
-Webhook failures:
-
-```text
-WEBHOOK_INVALID_SIGNATURE
-WEBHOOK_UNKNOWN_MERCHANT
-WEBHOOK_DUPLICATE
-WEBHOOK_INVALID_PAYLOAD
-```
-
-Do not return implementation details or secrets to the browser.
-
----
-
-# 41. Testing Requirements
-
-The agent must write automated tests.
-
-Minimum tests:
-
-## Authentication
-
-```text
-signup works
-login works
-invalid credentials fail
-```
-
-## OAuth
-
-```text
-OAuth state generated
-OAuth state validated
-invalid state rejected
-OAuth callback exchanges code
-tokens stored encrypted
-tokens never returned in API response
-```
-
-## Token refresh
-
-```text
-expired token triggers refresh
-new access token stored
-new refresh token stored
-old refresh token is replaced
-```
-
-## Webhooks
-
-```text
-valid signature accepted
-invalid signature rejected
-malformed payload rejected
-duplicate event ignored
-unknown merchant rejected
-payment.failed persisted
-```
-
-## Tenant isolation
-
-```text
-Merchant A cannot access Merchant B's events
-Merchant A cannot access Merchant B's provider connection
-```
-
----
-
-# 42. Acceptance Test
-
-The phase is considered complete only when this exact scenario works.
-
-### Step 1
-
-Create a Voic account.
-
-```text
-User
-  ↓
-Merchant
-```
-
-### Step 2
-
-Click:
-
-```text
-Connect Razorpay
-```
-
-### Step 3
-
-Complete Razorpay OAuth authorization.
-
-### Step 4
-
-Voic receives the callback.
-
-### Step 5
-
-Voic securely stores:
-
-```text
-provider = razorpay
-razorpay_account_id
-access_token
-refresh_token
-expiry
-scopes
-```
-
-### Step 6
-
-Voic configures the webhook.
-
-### Step 7
-
-Create an intentional test payment failure in Razorpay Test Mode.
-
-### Step 8
-
-Razorpay sends:
-
-```text
-payment.failed
-```
-
-### Step 9
-
-Voic receives the webhook.
-
-### Step 10
-
-Voic verifies:
-
-```text
-X-Razorpay-Signature
-```
-
-against the raw request body.
-
-### Step 11
-
-Voic identifies the merchant.
-
-### Step 12
-
-Voic persists:
-
-```text
-PaymentEvent
-```
-
-### Step 13
-
-The developer can see the event in the database/dashboard.
-
-The complete test should look like:
-
-```text
-                 ┌───────────────┐
-                 │   Merchant    │
-                 └───────┬───────┘
-                         │
-                       OAuth
-                         │
-                         ▼
-                 ┌───────────────┐
-                 │    Voic       │
-                 │   Backend     │
-                 └───────┬───────┘
-                         │
-                    webhook setup
-                         │
-                         ▼
-                 ┌───────────────┐
-                 │   Razorpay    │
-                 └───────┬───────┘
-                         │
-                   test payment
-                         │
-                       FAIL
-                         │
-                         ▼
-                 payment.failed
-                         │
-                         ▼
-                 ┌───────────────┐
-                 │ Voic Webhook  │
-                 └───────┬───────┘
-                         │
-                  verify signature
-                         │
-                         ▼
-                 identify merchant
-                         │
-                         ▼
-                 persist event
-                         │
-                         ▼
-                 ┌───────────────┐
-                 │ PaymentEvent  │
-                 └───────────────┘
-```
-
----
-
-# 43. Explicitly Out of Scope
-
-Do NOT implement these in Phase 1:
-
-### Voice
-
-* ElevenLabs
-* Vobiz
-* SIP
-* phone calls
-* STT
-* TTS
-* voice-agent prompts
-* Hinglish conversation
-* LangGraph
-
-### Recovery
-
-* RecoveryCase
-* eligibility engine
-* call scheduling
-* retries
-* customer calling
-* call outcomes
-
-### Email
-
-* email domain configuration
-* SMTP
-* Resend/SendGrid/etc.
-* email templates
-* sending checkout links
-
-### Payment Recovery
-
-* payment-link generation
-* checkout generation
-* recovered-money attribution
-* recovery analytics
-
-### AI
-
-* LLM
-* agent orchestration
-* tool calling
-* conversation memory
-
-These belong to later phases.
-
----
-
-# 44. Future Architecture Boundary
-
-The eventual system should evolve toward:
-
-```text
-                     ┌────────────────────┐
-                     │   Payment Provider  │
-                     └──────────┬─────────┘
-                                │
-                         OAuth / Webhooks
-                                │
-                                ▼
-                     ┌────────────────────┐
-                     │   Voic Backend     │
-                     │                    │
-                     │ Payment Events     │
-                     │ Recovery Cases     │
-                     │ Merchant State     │
-                     └──────────┬─────────┘
-                                │
-                         Orchestration
-                                │
-                                ▼
-                     ┌────────────────────┐
-                     │   Voice Agent      │
-                     │                    │
-                     │ STT                │
-                     │ LLM                │
-                     │ TTS                │
-                     └──────────┬─────────┘
-                                │
-                         actions/tools
-                                │
-               ┌────────────────┼────────────────┐
-               │                │                │
-               ▼                ▼                ▼
-            Email          Payment API       Other tools
-               │                │
-               └────────┬───────┘
-                        ▼
-                 Customer Payment
-                        │
-                        ▼
-                 Payment Provider
-                        │
-                        ▼
-                  Voic Webhook
-```
-
-The backend remains the source of truth.
-
----
-
-# 45. Implementation Philosophy
-
-Do not over-engineer Phase 1.
-
-The objective is not to create the final Voic architecture.
-
-The objective is to establish a trustworthy foundation:
-
-```text
-Identity
-+
-Merchant boundary
-+
-OAuth
-+
-Secure credentials
-+
-Webhook verification
-+
-Event persistence
-```
-
-Build these correctly before adding AI.
-
-When implementing something provider-specific, isolate it behind a provider abstraction.
-
-When implementing something security-sensitive, prefer explicit code and tests over clever abstractions.
-
-When unsure about a provider behavior, consult the current provider documentation rather than guessing.
-
----
-
-# 46. Current Razorpay Constraints to Respect
-
-The implementation must account for the following currently documented behavior:
-
-* Razorpay OAuth is intended for technology partners accessing sub-merchant accounts.
-* OAuth uses an authorization-code flow.
-* OAuth returns an access token, refresh token, and `razorpay_account_id`.
-* Access tokens are currently documented as expiring after 90 days.
-* Refreshing an access token returns a new refresh token, so refresh-token rotation must be handled correctly.
-* Razorpay webhook signatures use HMAC-SHA256 over the raw request body.
-* Duplicate webhook delivery is possible and must be handled idempotently.
-* Webhooks can arrive out of order.
-* Webhooks require a publicly reachable endpoint; localhost cannot directly receive provider webhook delivery.
-* Razorpay provides Test Mode for testing webhook behavior.
-
-These are integration facts, not assumptions.
-
----
-
-# 47. Definition of Done
-
-Phase 1 is DONE when:
-
-* [ ] Next.js application runs.
-* [ ] Python/FastAPI backend runs.
-* [ ] PostgreSQL database is configured.
-* [ ] Database migrations work.
-* [ ] User signup works.
-* [ ] User login works.
-* [ ] Merchant is created/associated correctly.
-* [ ] Razorpay OAuth connection can be initiated.
-* [ ] OAuth `state` validation is implemented.
-* [ ] Razorpay authorization callback works.
-* [ ] OAuth tokens are stored securely.
-* [ ] Razorpay account ID is stored.
-* [ ] Access-token expiration is stored.
-* [ ] Refresh-token rotation works.
-* [ ] Razorpay webhook is configured.
-* [ ] Public webhook endpoint exists.
-* [ ] Webhook signature is verified against the raw request body.
-* [ ] Merchant is identified from the provider account boundary.
-* [ ] Duplicate webhook events are safely ignored.
-* [ ] `payment.failed` is persisted.
-* [ ] Raw payload is retained securely for debugging.
-* [ ] Merchant isolation is enforced.
-* [ ] Automated tests cover OAuth, token storage, webhook validation, idempotency, and tenant isolation.
-* [ ] A test payment failure can be intentionally triggered.
-* [ ] The resulting `payment.failed` event appears in the Voic database/dashboard.
-
-Once all of these work, **stop Phase 1**.
-
-Do not proceed to the voice agent until this foundation has been validated.
+Once these criteria pass, stop Phase 1. The backend remains the source of truth for future recovery work.

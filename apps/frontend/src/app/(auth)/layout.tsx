@@ -1,12 +1,22 @@
 import Link from "next/link";
 
-export default function AuthLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+import { Button } from "@/components/ui/button";
+import { SiteHeader } from "@/components/site-header";
+
+/**
+ * Layout component for authentication pages (login and signup).
+ *
+ * @param props - Component props containing children to render.
+ * @returns A layout with site header and navigation back to home.
+ */
+export default function AuthLayout({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
   return (
-    <main className="auth-page shell">
-      <header className="site-header">
-        <Link className="wordmark" href="/">voic<span>.</span></Link>
-        <Link className="text-link" href="/">Back to home</Link>
-      </header>
+    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 pb-16">
+      <SiteHeader>
+        <Button variant="link" render={<Link href="/">Back to home</Link>} />
+      </SiteHeader>
       {children}
     </main>
   );

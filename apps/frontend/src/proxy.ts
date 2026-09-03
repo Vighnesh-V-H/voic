@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
+/**
+ * Middleware function to verify authentication before allowing access to protected routes.
+ *
+ * @param request - The incoming Next.js request.
+ * @returns A NextResponse allowing the request or redirecting to login.
+ */
 export async function proxy(request: NextRequest) {
   const cookieHeader = request.headers.get("cookie");
   if (cookieHeader) {
@@ -22,5 +28,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*"],
+  matcher: ["/dashboard/:path*", "/settings/integrations/:path*"],
 };

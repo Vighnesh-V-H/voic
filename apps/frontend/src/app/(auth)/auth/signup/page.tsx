@@ -1,18 +1,43 @@
 import { AuthForm } from "@/components/auth-form";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 
+/**
+ * Signup page for creating new merchant accounts.
+ *
+ * @returns A page with signup form and onboarding messaging.
+ */
 export default function SignupPage() {
   return (
-    <section className="auth-layout">
-      <div className="auth-intro">
-        <p className="eyebrow">Start with the boundary</p>
-        <h1>Build your recovery foundation with confidence.</h1>
-        <p className="hero-copy">Create a merchant workspace first. Provider connections and payment events will belong to it.</p>
+    <section className="grid flex-1 items-center gap-11 py-12 lg:grid-cols-2 lg:gap-20">
+      <div>
+        <p className="mb-5 text-xs font-extrabold tracking-[0.14em] text-primary uppercase">
+          Start with the boundary
+        </p>
+        <h1 className="mb-6 max-w-xl text-5xl leading-[0.95] font-extrabold tracking-tighter text-balance sm:text-6xl">
+          Build your recovery foundation with confidence.
+        </h1>
+        <p className="max-w-xl text-lg leading-relaxed text-muted-foreground">
+          Create a merchant workspace first. Provider connections and payment
+          events will belong to it.
+        </p>
       </div>
-      <div className="auth-card">
-        <h2>Create your account</h2>
-        <p>Your merchant account starts with one secure identity.</p>
-        <AuthForm mode="signup" />
-      </div>
+      <Card className="shadow-[12px_12px_0_0_var(--secondary)]">
+        <CardHeader>
+          <CardTitle className="text-2xl">Create your account</CardTitle>
+          <CardDescription>
+            Your merchant account starts with one secure identity.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AuthForm mode="signup" />
+        </CardContent>
+      </Card>
     </section>
   );
 }
