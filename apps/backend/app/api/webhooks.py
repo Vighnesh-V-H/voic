@@ -1,10 +1,11 @@
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from logging import getLogger
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -18,6 +19,40 @@ from app.models.user import User
 from app.services.providers.stripe import verify_webhook_signature
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
+
+logger = getLogger(__name__)
+
+
+def delete_merchant_stripe_data(db: Session, merchant_id: str) -> None:
+    """
+    Remove all Voic-owned Stripe data for a merchant.
+
+    Deletes payment events, payments, then provider connections for
+    provider ``stripe``. The merchant and user records are preserved so
+    the merchant stays logged in.
+
+    Args:
+        db: Database session for deleting records.
+        merchant_id: The merchant whose Stripe data should be removed.
+    """
+    db.execute(
+        delete(PaymentEvent).where(
+            PaymentEvent.merchant_id == merchant_id,
+            PaymentEvent.provider == "stripe",
+        )
+    )
+    db.execute(
+        delete(Payment).where(
+            Payment.merchant_id == merchant_id,
+            Payment.provider == "stripe",
+        )
+    )
+    db.execute(
+        delete(ProviderConnection).where(
+            ProviderConnection.merchant_id == merchant_id,
+            ProviderConnection.provider == "stripe",
+        )
+    )
 
 
 class PaymentEventResponse(BaseModel):
@@ -107,10 +142,11 @@ async def stripe_webhook(
         settings: Application settings containing the webhook secret.
 
     Returns:
-        A dictionary indicating the processing result: {"status": "processed"} or {"status": "duplicate"}.
+        A dictionary indicating the processing result: ``processed``,
+        ``duplicate``, or ``ignored`` for unknown/disconnected accounts.
 
     Raises:
-        HTTPException: If signature verification fails, payload is invalid, or merchant is unknown.
+        HTTPException: If signature verification fails or payload is invalid.
     """
     payload = await request.body()
     signature = request.headers.get("Stripe-Signature", "")
@@ -134,8 +170,17 @@ async def stripe_webhook(
             ProviderConnection.provider_account_id == account_id,
         )
     )
-    if connection is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="WEBHOOK_UNKNOWN_MERCHANT")
+    if event_type == "account.application.deauthorized":
+        if connection is None:
+            logger.info("Ignoring deauthorized event for unknown account %s", account_id)
+            return {"status": "ignored"}
+        delete_merchant_stripe_data(db, connection.merchant_id)
+        db.commit()
+        logger.info("Removed Stripe data for merchant %s after deauthorization", connection.merchant_id)
+        return {"status": "processed"}
+    if connection is None or connection.status != "connected":
+        logger.info("Ignoring %s event for unknown/disconnected account %s", event_type, account_id)
+        return {"status": "ignored"}
     duplicate = db.scalar(
         select(PaymentEvent).where(
             PaymentEvent.provider == "stripe", PaymentEvent.provider_event_id == event_id
@@ -189,8 +234,6 @@ async def stripe_webhook(
             ):
                 payment.status = next_status
                 payment.last_event_at = occurred_at
-    elif event_type == "account.application.deauthorized":
-        connection.status = "disconnected"
     try:
         db.commit()
     except IntegrityError:

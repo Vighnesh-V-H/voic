@@ -139,9 +139,16 @@ export function StripeIntegration() {
   async function disconnectStripe() {
     setError(null);
     setNotice(null);
+    if (
+      !window.confirm(
+        "Disconnecting Stripe will permanently remove all Stripe connections, payments, and webhook events from Voic. You will stay logged in. Continue?",
+      )
+    ) {
+      return;
+    }
     try {
       await apiRequest<void>("/api/v1/stripe/connection", { method: "DELETE" });
-      setNotice("Stripe has been disconnected. Historical payments remain available.");
+      setNotice("Stripe has been disconnected and all Stripe data has been removed from Voic.");
       await loadIntegration();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Stripe could not be disconnected.");
