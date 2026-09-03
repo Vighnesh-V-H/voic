@@ -16,6 +16,9 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
+    """
+    Run migrations in 'offline' mode without a live database connection.
+    """
     context.configure(
         url=get_settings().database_url,
         target_metadata=target_metadata,
@@ -27,6 +30,9 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    """
+    Run migrations in 'online' mode with a live database connection.
+    """
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

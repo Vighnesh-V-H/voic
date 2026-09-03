@@ -57,6 +57,11 @@ export type PaymentEvent = {
   occurred_at: string;
 };
 
+/**
+ * Get the API base URL for server-side or client-side requests.
+ *
+ * @returns The backend API base URL from environment variables or default.
+ */
 export function apiBaseUrl() {
   if (typeof window === "undefined") {
     return process.env.BACKEND_URL ?? "http://localhost:8000";
@@ -65,6 +70,14 @@ export function apiBaseUrl() {
   return process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 }
 
+/**
+ * Make an authenticated API request with JSON body and credentials.
+ *
+ * @param path - The API endpoint path (e.g., /api/v1/stripe/connection).
+ * @param init - Optional fetch RequestInit options.
+ * @returns The parsed JSON response body.
+ * @throws Error if the response is not ok, with detail from the API if available.
+ */
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBaseUrl()}${path}`, {
     ...init,

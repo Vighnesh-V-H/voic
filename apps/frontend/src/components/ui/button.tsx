@@ -40,6 +40,12 @@ const buttonVariants = cva(
   }
 )
 
+/**
+ * Button component with variant and size options.
+ *
+ * @param props - Component props including className, variant, size, and button attributes.
+ * @returns A button element with the specified variant and size styling.
+ */
 function Button({
   className,
   variant = "default",

@@ -43,11 +43,23 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 
+/**
+ * Format a money amount in the smallest currency unit (e.g., cents) to a localized currency string.
+ *
+ * @param amount - The amount in cents (or smallest unit).
+ * @param currency - The three-letter ISO currency code.
+ * @returns A formatted currency string or "Amount unavailable" if inputs are invalid.
+ */
 function formatMoney(amount: number | null | undefined, currency: string | null | undefined) {
   if (amount === null || amount === undefined || !currency) return "Amount unavailable";
   return new Intl.NumberFormat(undefined, { style: "currency", currency: currency.toUpperCase() }).format(amount / 100);
 }
 
+/**
+ * Stripe integration component for managing connections, products, prices, and payments.
+ *
+ * @returns A comprehensive UI for Stripe connection and payment operations.
+ */
 export function StripeIntegration() {
   const [connection, setConnection] = useState<StripeConnection | null>(null);
   const [products, setProducts] = useState<StripeProduct[]>([]);
@@ -69,6 +81,9 @@ export function StripeIntegration() {
   const [isCreating, setIsCreating] = useState(false);
   const [isPending, startTransition] = useTransition();
 
+  /**
+   * Load Stripe connection, products, prices, payments, and events from the API.
+   */
   async function loadIntegration() {
     setIsLoading(true);
     setError(null);
@@ -111,10 +126,16 @@ export function StripeIntegration() {
     return () => window.clearTimeout(loadTask);
   }, []);
 
+  /**
+   * Redirect the user to the Stripe OAuth authorization page.
+   */
   function connectStripe() {
     window.open(`${apiBaseUrl()}/api/v1/stripe/connect`, "_self");
   }
 
+  /**
+   * Disconnect the merchant's Stripe account and reload integration data.
+   */
   async function disconnectStripe() {
     setError(null);
     setNotice(null);
@@ -127,6 +148,11 @@ export function StripeIntegration() {
     }
   }
 
+  /**
+   * Create a PaymentIntent or Payment Link using the selected price and quantity.
+   *
+   * @param kind - The type of payment to create: "payment" for PaymentIntent or "link" for Payment Link.
+   */
   async function createPayment(kind: "payment" | "link") {
     setError(null);
     setNotice(null);

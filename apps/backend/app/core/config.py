@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     )
     @classmethod
     def use_default_when_empty(cls, value: object, info) -> object:
+        """
+        Replace empty or whitespace-only strings with field defaults.
+
+        Args:
+            value: The input value from environment or config.
+            info: Validation info containing the field name.
+
+        Returns:
+            The default value if input is None or empty string, otherwise the original value.
+        """
         if value is None:
             return cls.model_fields[info.field_name].default
         if isinstance(value, str) and not value.strip():
@@ -41,6 +51,15 @@ class Settings(BaseSettings):
     @field_validator("database_url", mode="before")
     @classmethod
     def normalize_postgresql_driver(cls, value: str) -> str:
+        """
+        Normalize PostgreSQL connection URLs to use the psycopg driver.
+
+        Args:
+            value: The database URL string.
+
+        Returns:
+            A database URL with postgresql+psycopg:// scheme if input starts with postgres:// or postgresql://.
+        """
         if isinstance(value, str) and value.startswith("postgres://"):
             return "postgresql+psycopg://" + value.removeprefix("postgres://")
         if isinstance(value, str) and value.startswith("postgresql://"):
@@ -49,9 +68,21 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
+        """
+        Parse the comma-separated cors_origins string into a list of origins.
+
+        Returns:
+            A list of non-empty origin strings.
+        """
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 
 @lru_cache
 def get_settings() -> Settings:
+    """
+    Get the application settings singleton, cached for reuse.
+
+    Returns:
+        The application Settings instance.
+    """
     return Settings()

@@ -2,6 +2,12 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * Card container component with optional size variants.
+ *
+ * @param props - Component props including className, size, and standard div attributes.
+ * @returns A card div element with rounded corners and ring border.
+ */
 function Card({
   className,
   size = "default",

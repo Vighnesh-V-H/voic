@@ -7,6 +7,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
+/**
+ * Signup page for creating new merchant accounts.
+ *
+ * @returns A page with signup form and onboarding messaging.
+ */
 export default function SignupPage() {
   return (
     <section className="grid flex-1 items-center gap-11 py-12 lg:grid-cols-2 lg:gap-20">

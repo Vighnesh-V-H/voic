@@ -17,6 +17,12 @@ type AuthFormProps = {
   mode: "login" | "signup";
 };
 
+/**
+ * Authentication form component for login or signup.
+ *
+ * @param props - Component props containing the mode (login or signup).
+ * @returns A form for user authentication.
+ */
 export function AuthForm({ mode }: AuthFormProps) {
   const router = useRouter();
   const isSignup = mode === "signup";
@@ -26,6 +32,11 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  /**
+   * Handle form submission for login or signup.
+   *
+   * @param event - The form submit event.
+   */
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);

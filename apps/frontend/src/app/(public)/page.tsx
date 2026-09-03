@@ -29,6 +29,11 @@ const SIGNAL_ROWS = [
   },
 ] as const;
 
+/**
+ * Home page for the Voic marketing site.
+ *
+ * @returns The landing page with product messaging and call-to-action buttons.
+ */
 export default function Home() {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 pb-16">

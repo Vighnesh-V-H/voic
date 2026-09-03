@@ -33,6 +33,15 @@ class PaymentEventResponse(BaseModel):
 
 
 def event_time(value: object) -> datetime:
+    """
+    Convert a timestamp value to a timezone-aware datetime or return the current time.
+
+    Args:
+        value: A Unix timestamp (int or float) or any other object.
+
+    Returns:
+        A timezone-aware datetime in UTC.
+    """
     if isinstance(value, (int, float)):
         return datetime.fromtimestamp(value, tz=UTC)
     return datetime.now(UTC)
@@ -45,6 +54,19 @@ def payment_for_event(
     provider_payment_id: str | None,
     metadata: Mapping[str, object],
 ) -> Payment | None:
+    """
+    Locate a payment record matching the event's metadata or provider payment ID.
+
+    Args:
+        db: Database session for querying payment records.
+        merchant_id: The merchant ID owning the payment.
+        connection: The provider connection associated with the event.
+        provider_payment_id: The provider's payment ID from the event.
+        metadata: The event metadata containing voic_payment_id.
+
+    Returns:
+        The matching Payment record or None if not found.
+    """
     local_payment_id = metadata.get("voic_payment_id")
     if isinstance(local_payment_id, str):
         payment = db.scalar(
@@ -76,6 +98,20 @@ async def stripe_webhook(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
+    """
+    Handle incoming Stripe Connect webhook events, verify signature, and process payment-related events.
+
+    Args:
+        request: The incoming webhook request containing the event payload and signature.
+        db: Database session for persisting payment events and updating payment status.
+        settings: Application settings containing the webhook secret.
+
+    Returns:
+        A dictionary indicating the processing result: {"status": "processed"} or {"status": "duplicate"}.
+
+    Raises:
+        HTTPException: If signature verification fails, payload is invalid, or merchant is unknown.
+    """
     payload = await request.body()
     signature = request.headers.get("Stripe-Signature", "")
     if not verify_webhook_signature(payload, signature, settings.stripe_connect_webhook_secret):
@@ -168,6 +204,16 @@ def list_payment_events(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[PaymentEventResponse]:
+    """
+    List recent payment events for the authenticated merchant.
+
+    Args:
+        user: The authenticated user making the request.
+        db: Database session for querying payment events.
+
+    Returns:
+        A list of up to 50 most recent payment events, ordered by occurred_at descending.
+    """
     events = db.scalars(
         select(PaymentEvent)
         .where(PaymentEvent.merchant_id == user.merchant_id)

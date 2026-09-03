@@ -98,6 +98,17 @@ def fake_provider():
 
 
 def signup_and_login(client, email: str, merchant_name: str):
+    """
+    Create a new merchant account and log in to establish a session.
+
+    Args:
+        client: The test client for making HTTP requests.
+        email: The email address for the new account.
+        merchant_name: The merchant name for the new account.
+
+    Returns:
+        The login response object.
+    """
     client.post(
         "/api/v1/auth/signup",
         json={"email": email, "password": "correct horse battery", "merchant_name": merchant_name},
@@ -109,6 +120,15 @@ def signup_and_login(client, email: str, merchant_name: str):
 
 
 def connect_state(client) -> str:
+    """
+    Initiate a Stripe OAuth connection and extract the state parameter.
+
+    Args:
+        client: The test client for making HTTP requests.
+
+    Returns:
+        The OAuth state token from the authorization URL.
+    """
     response = client.get("/api/v1/stripe/connect", follow_redirects=False)
     assert response.status_code == 307
     return parse_qs(urlparse(response.headers["location"]).query)["state"][0]
@@ -162,6 +182,12 @@ def test_callback_rejects_invalid_state_before_exchange(client, fake_provider):
 
 
 def expire_oauth_state(state: str) -> None:
+    """
+    Manually expire an OAuth state record in the database for testing.
+
+    Args:
+        state: The raw OAuth state token to expire.
+    """
     override = app.dependency_overrides[get_db]
     gen = override()
     db = next(gen)
@@ -405,6 +431,15 @@ def test_payment_link_uses_existing_price_and_returns_hosted_url(client, fake_pr
 
 
 def signed_headers(payload: str) -> dict[str, str]:
+    """
+    Generate a valid Stripe webhook signature header for the given payload.
+
+    Args:
+        payload: The webhook payload string.
+
+    Returns:
+        A dictionary with the Stripe-Signature header.
+    """
     timestamp = str(int(time.time()))
     signed_payload = f"{timestamp}.{payload}".encode()
     signature = hmac.new(
@@ -414,6 +449,16 @@ def signed_headers(payload: str) -> dict[str, str]:
 
 
 def connected_payment(client, fake_provider) -> str:
+    """
+    Create a merchant, connect Stripe, and create a payment for testing webhooks.
+
+    Args:
+        client: The test client for making HTTP requests.
+        fake_provider: The fake Stripe provider fixture.
+
+    Returns:
+        The payment ID of the created payment.
+    """
     signup_and_login(client, "owner@example.com", "Acme Store")
     state = connect_state(client)
     client.get(f"/api/v1/stripe/callback?code=oauth-code&state={state}", follow_redirects=False)
@@ -426,6 +471,18 @@ def webhook_payload(
     account_id: str = "acct_test_123",
     event_id: str | None = None,
 ) -> str:
+    """
+    Generate a fake Stripe webhook event payload for testing.
+
+    Args:
+        payment_id: The Voic payment ID to include in metadata.
+        event_type: The Stripe event type (e.g., payment_intent.succeeded).
+        account_id: The Stripe account ID for the event.
+        event_id: Optional event ID (generated if not provided).
+
+    Returns:
+        A JSON-encoded webhook event payload string.
+    """
     return json.dumps(
         {
             "id": event_id or ("evt_test_123" if event_type.endswith("succeeded") else "evt_test_failed"),

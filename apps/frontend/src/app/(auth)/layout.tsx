@@ -3,6 +3,12 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { SiteHeader } from "@/components/site-header";
 
+/**
+ * Layout component for authentication pages (login and signup).
+ *
+ * @param props - Component props containing children to render.
+ * @returns A layout with site header and navigation back to home.
+ */
 export default function AuthLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {

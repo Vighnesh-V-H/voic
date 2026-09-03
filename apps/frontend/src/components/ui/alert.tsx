@@ -19,6 +19,12 @@ const alertVariants = cva(
   }
 )
 
+/**
+ * Alert component for displaying contextual messages with optional variants.
+ *
+ * @param props - Component props including className, variant, and standard div attributes.
+ * @returns An alert div with role="alert".
+ */
 function Alert({
   className,
   variant,
@@ -34,6 +40,12 @@ function Alert({
   )
 }
 
+/**
+ * Alert title subcomponent for displaying the main alert heading.
+ *
+ * @param props - Component props including className and standard div attributes.
+ * @returns A div for the alert title.
+ */
 function AlertTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -47,6 +59,12 @@ function AlertTitle({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/**
+ * Alert description subcomponent for displaying detailed alert content.
+ *
+ * @param props - Component props including className and standard div attributes.
+ * @returns A div for the alert description.
+ */
 function AlertDescription({
   className,
   ...props
@@ -63,6 +81,12 @@ function AlertDescription({
   )
 }
 
+/**
+ * Alert action subcomponent for displaying action buttons or icons in the top-right corner.
+ *
+ * @param props - Component props including className and standard div attributes.
+ * @returns A div for the alert action.
+ */
 function AlertAction({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div

@@ -24,4 +24,10 @@ app.include_router(webhooks_router, prefix="/api/v1")
 
 @app.get("/health")
 def health() -> dict[str, str]:
+    """
+    Health check endpoint for service monitoring.
+
+    Returns:
+        A dictionary with status "ok".
+    """
     return {"status": "ok"}

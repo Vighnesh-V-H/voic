@@ -13,6 +13,12 @@ import {
 } from "@/components/ui/card";
 import { SiteHeader } from "@/components/site-header";
 
+/**
+ * Fetch the authenticated user's identity from the backend.
+ *
+ * @returns The user's identity containing user and merchant details.
+ * @throws Redirects to login if unauthenticated or throws error if verification fails.
+ */
 async function getIdentity(): Promise<Identity> {
   const cookieHeader = (await cookies()).toString();
   const response = await fetch(
@@ -31,6 +37,11 @@ async function getIdentity(): Promise<Identity> {
   return response.json() as Promise<Identity>;
 }
 
+/**
+ * Dashboard page showing merchant account details and Stripe integration.
+ *
+ * @returns A server-rendered dashboard page with authenticated merchant information.
+ */
 export default async function DashboardPage() {
   const identity = await getIdentity();
 

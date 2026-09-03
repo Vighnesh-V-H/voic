@@ -46,10 +46,28 @@ class StripePriceResponse(BaseModel):
 
 
 def get_payment_provider(settings: Settings = Depends(get_settings)) -> PaymentProvider:
+    """
+    Dependency injection function that provides a PaymentProvider instance.
+
+    Args:
+        settings: Application settings containing Stripe configuration.
+
+    Returns:
+        A StripeProvider instance configured with the given settings.
+    """
     return StripeProvider(settings)
 
 
 def connection_response(connection: ProviderConnection | None) -> StripeConnectionResponse:
+    """
+    Convert a ProviderConnection model to a StripeConnectionResponse.
+
+    Args:
+        connection: The provider connection record, or None if not found.
+
+    Returns:
+        A StripeConnectionResponse with connection details or disconnected status.
+    """
     if connection is None:
         return StripeConnectionResponse(provider="stripe", connected=False, status="disconnected")
     return StripeConnectionResponse(
@@ -63,10 +81,30 @@ def connection_response(connection: ProviderConnection | None) -> StripeConnecti
 
 
 def state_digest(value: str) -> str:
+    """
+    Compute a SHA-256 hash digest of the given state string.
+
+    Args:
+        value: The raw state string to hash.
+
+    Returns:
+        The hexadecimal digest of the state hash.
+    """
     return sha256(value.encode("utf-8")).hexdigest()
 
 
 def create_oauth_state(db: Session, user: User, settings: Settings) -> str:
+    """
+    Create a new OAuth state token and persist it to the database.
+
+    Args:
+        db: Database session for persisting the state.
+        user: The user initiating the OAuth flow.
+        settings: Application settings (currently unused).
+
+    Returns:
+        The raw state token to be included in the OAuth authorization URL.
+    """
     raw_state = token_urlsafe(32)
     db.add(
         OAuthState(
@@ -81,6 +119,17 @@ def create_oauth_state(db: Session, user: User, settings: Settings) -> str:
 
 
 def consume_oauth_state(db: Session, raw_state: str, user: User) -> None:
+    """
+    Mark an OAuth state token as consumed if it is valid and unused.
+
+    Args:
+        db: Database session for updating the state.
+        raw_state: The raw state token received from the OAuth callback.
+        user: The user who initiated the OAuth flow.
+
+    Raises:
+        HTTPException: If the state is invalid, expired, already used, or not found.
+    """
     now = datetime.now(UTC)
     consumed = db.execute(
         update(OAuthState)
@@ -100,6 +149,16 @@ def consume_oauth_state(db: Session, raw_state: str, user: User) -> None:
 
 
 def redirect_to_frontend(settings: Settings, result: str) -> RedirectResponse:
+    """
+    Create a redirect response to the frontend integrations page with a result parameter.
+
+    Args:
+        settings: Application settings containing the frontend URL.
+        result: The OAuth result status to include in the query string.
+
+    Returns:
+        A RedirectResponse to the frontend settings/integrations page.
+    """
     return RedirectResponse(
         url=f"{settings.frontend_url}/settings/integrations?stripe={result}",
         status_code=status.HTTP_307_TEMPORARY_REDIRECT,
@@ -113,6 +172,18 @@ def connect(
     settings: Settings = Depends(get_settings),
     provider: PaymentProvider = Depends(get_payment_provider),
 ) -> RedirectResponse:
+    """
+    Initiate Stripe OAuth connection flow by redirecting to the authorization URL.
+
+    Args:
+        user: The authenticated user initiating the connection.
+        db: Database session for creating OAuth state.
+        settings: Application settings.
+        provider: Payment provider instance for generating the authorization URL.
+
+    Returns:
+        A redirect response to the Stripe authorization page.
+    """
     state = create_oauth_state(db, user, settings)
     return RedirectResponse(provider.authorization_url(state), status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
@@ -125,6 +196,22 @@ def callback(
     settings: Settings = Depends(get_settings),
     provider: PaymentProvider = Depends(get_payment_provider),
 ) -> RedirectResponse:
+    """
+    Handle Stripe OAuth callback, exchange authorization code for account details, and persist the connection.
+
+    Args:
+        request: The incoming request containing OAuth callback parameters.
+        user: The authenticated user completing the OAuth flow.
+        db: Database session for persisting the provider connection.
+        settings: Application settings including Stripe mode and frontend URL.
+        provider: Payment provider instance for exchanging the OAuth code.
+
+    Returns:
+        A redirect response to the frontend with the connection result.
+
+    Raises:
+        HTTPException: If state validation fails, token exchange fails, mode mismatches, or account conflicts exist.
+    """
     error = request.query_params.get("error")
     raw_state = request.query_params.get("state")
     if not raw_state:
@@ -204,6 +291,16 @@ def get_connection(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> StripeConnectionResponse:
+    """
+    Retrieve the current Stripe connection status for the authenticated merchant.
+
+    Args:
+        user: The authenticated user requesting connection status.
+        db: Database session for querying the provider connection.
+
+    Returns:
+        The current or most recent Stripe connection status.
+    """
     connection = db.scalar(
         select(ProviderConnection).where(
             ProviderConnection.merchant_id == user.merchant_id,
@@ -229,6 +326,17 @@ def disconnect(
     db: Session = Depends(get_db),
     provider: PaymentProvider = Depends(get_payment_provider),
 ) -> None:
+    """
+    Disconnect the merchant's Stripe account by deauthorizing the OAuth connection.
+
+    Args:
+        user: The authenticated user requesting disconnection.
+        db: Database session for updating the connection status.
+        provider: Payment provider instance for calling the deauthorize endpoint.
+
+    Raises:
+        HTTPException: If no connected Stripe account is found or deauthorization fails.
+    """
     connection = db.scalar(
         select(ProviderConnection).where(
             ProviderConnection.merchant_id == user.merchant_id,
@@ -246,6 +354,19 @@ def disconnect(
 
 
 def active_connection(db: Session, merchant_id: str) -> ProviderConnection:
+    """
+    Retrieve the active Stripe connection for a merchant or raise an error if not found.
+
+    Args:
+        db: Database session for querying the provider connection.
+        merchant_id: The merchant's unique identifier.
+
+    Returns:
+        The active provider connection.
+
+    Raises:
+        HTTPException: If no connected Stripe account exists for the merchant.
+    """
     connection = db.scalar(
         select(ProviderConnection).where(
             ProviderConnection.merchant_id == merchant_id,
@@ -259,12 +380,31 @@ def active_connection(db: Session, merchant_id: str) -> ProviderConnection:
 
 
 def provider_value(value: object, name: str) -> object:
+    """
+    Extract a value from a provider response object or mapping.
+
+    Args:
+        value: A provider response object (mapping or object with attributes).
+        name: The field name to extract.
+
+    Returns:
+        The extracted value, or None if not present.
+    """
     if isinstance(value, Mapping):
         return value.get(name)
     return getattr(value, name, None)
 
 
 def product_response(product: Mapping[str, object]) -> dict[str, object]:
+    """
+    Transform a Stripe product object into a simplified response dictionary.
+
+    Args:
+        product: The product object from the Stripe API.
+
+    Returns:
+        A dictionary containing product id, name, description, active status, and default_price id.
+    """
     default_price = provider_value(product, "default_price")
     if isinstance(default_price, Mapping):
         default_price = default_price.get("id")
@@ -285,6 +425,20 @@ def list_products(
     db: Session = Depends(get_db),
     provider: PaymentProvider = Depends(get_payment_provider),
 ) -> list[dict[str, object]]:
+    """
+    List all active products from the connected Stripe account.
+
+    Args:
+        user: The authenticated user making the request.
+        db: Database session for retrieving the active connection.
+        provider: Payment provider instance for fetching products.
+
+    Returns:
+        A list of product dictionaries with id, name, description, active, and default_price fields.
+
+    Raises:
+        HTTPException: If the merchant has no active Stripe connection or the Stripe API call fails.
+    """
     connection = active_connection(db, user.merchant_id)
     try:
         products = provider.list_products(connection.provider_account_id)
@@ -300,6 +454,21 @@ def get_product(
     db: Session = Depends(get_db),
     provider: PaymentProvider = Depends(get_payment_provider),
 ) -> dict[str, object]:
+    """
+    Retrieve a single product by ID from the connected Stripe account.
+
+    Args:
+        product_id: The Stripe product ID to retrieve.
+        user: The authenticated user making the request.
+        db: Database session for retrieving the active connection.
+        provider: Payment provider instance for fetching products.
+
+    Returns:
+        A product dictionary with id, name, description, active, and default_price fields.
+
+    Raises:
+        HTTPException: If the product is not found or the Stripe API call fails.
+    """
     connection = active_connection(db, user.merchant_id)
     try:
         products = provider.list_products(connection.provider_account_id)
@@ -317,6 +486,20 @@ def list_prices(
     db: Session = Depends(get_db),
     provider: PaymentProvider = Depends(get_payment_provider),
 ) -> list[StripePriceResponse]:
+    """
+    List all active one-time prices from the connected Stripe account.
+
+    Args:
+        user: The authenticated user making the request.
+        db: Database session for retrieving the active connection.
+        provider: Payment provider instance for fetching prices.
+
+    Returns:
+        A list of price objects with id, product_id, unit_amount, currency, active, and type fields.
+
+    Raises:
+        HTTPException: If the merchant has no active Stripe connection or the Stripe API call fails.
+    """
     connection = active_connection(db, user.merchant_id)
     try:
         prices = provider.list_prices(connection.provider_account_id)
@@ -364,6 +547,17 @@ class PaymentResponse(BaseModel):
 
 
 def payment_response(payment: Payment, client_secret: str | None = None, url: str | None = None) -> PaymentResponse:
+    """
+    Transform a Payment model into a PaymentResponse with optional transient fields.
+
+    Args:
+        payment: The payment record from the database.
+        client_secret: Optional client secret for confirming the PaymentIntent (transient, not persisted).
+        url: Optional payment link URL (overrides the persisted URL if provided).
+
+    Returns:
+        A PaymentResponse with all payment details including transient fields.
+    """
     return PaymentResponse(
         id=payment.id,
         provider_payment_id=payment.provider_payment_id,
@@ -378,6 +572,20 @@ def payment_response(payment: Payment, client_secret: str | None = None, url: st
 
 
 def price_details(provider: PaymentProvider, account_id: str, price_id: str) -> tuple[int, str]:
+    """
+    Fetch and validate a Stripe price for payment creation.
+
+    Args:
+        provider: Payment provider instance for fetching the price.
+        account_id: The connected Stripe account ID.
+        price_id: The Stripe price ID to retrieve.
+
+    Returns:
+        A tuple of (unit_amount, currency) for the price.
+
+    Raises:
+        HTTPException: If the price is not found, not one-time, or missing required fields.
+    """
     try:
         price = provider.get_price(account_id, price_id)
     except Exception as error:
@@ -398,6 +606,22 @@ def create_payment(
     db: Session = Depends(get_db),
     provider: PaymentProvider = Depends(get_payment_provider),
 ) -> PaymentResponse:
+    """
+    Create a new PaymentIntent for the given price and quantity.
+
+    Args:
+        payload: The payment request containing price_id and quantity.
+        idempotency_key: Optional idempotency key for safe retries.
+        user: The authenticated user creating the payment.
+        db: Database session for persisting the payment record.
+        provider: Payment provider instance for creating the PaymentIntent.
+
+    Returns:
+        A PaymentResponse with the payment details including the client_secret for Stripe.js.
+
+    Raises:
+        HTTPException: If quantity is invalid, connection is missing, or Stripe API call fails.
+    """
     if payload.quantity < 1:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Quantity must be positive")
     if idempotency_key is not None:
@@ -468,6 +692,20 @@ def get_payment(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> PaymentResponse:
+    """
+    Retrieve a single payment by ID for the authenticated merchant.
+
+    Args:
+        payment_id: The payment ID to retrieve.
+        user: The authenticated user making the request.
+        db: Database session for querying the payment record.
+
+    Returns:
+        A PaymentResponse with the payment details (without the client_secret).
+
+    Raises:
+        HTTPException: If the payment is not found or does not belong to the merchant.
+    """
     payment = db.scalar(
         select(Payment).where(Payment.id == payment_id, Payment.merchant_id == user.merchant_id)
     )
@@ -484,6 +722,22 @@ def create_payment_link(
     db: Session = Depends(get_db),
     provider: PaymentProvider = Depends(get_payment_provider),
 ) -> PaymentResponse:
+    """
+    Create a new Stripe Payment Link for the given price and quantity.
+
+    Args:
+        payload: The payment request containing price_id and quantity.
+        idempotency_key: Optional idempotency key for safe retries.
+        user: The authenticated user creating the payment link.
+        db: Database session for persisting the payment record.
+        provider: Payment provider instance for creating the Payment Link.
+
+    Returns:
+        A PaymentResponse with the payment details including the hosted checkout URL.
+
+    Raises:
+        HTTPException: If quantity is invalid, connection is missing, or Stripe API call fails.
+    """
     if payload.quantity < 1:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Quantity must be positive")
     connection = active_connection(db, user.merchant_id)
@@ -555,6 +809,20 @@ def get_payment_link(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> PaymentResponse:
+    """
+    Retrieve a single payment link by ID for the authenticated merchant.
+
+    Args:
+        payment_id: The payment ID to retrieve.
+        user: The authenticated user making the request.
+        db: Database session for querying the payment record.
+
+    Returns:
+        A PaymentResponse with the payment link details including the checkout URL.
+
+    Raises:
+        HTTPException: If the payment link is not found or does not belong to the merchant.
+    """
     payment = db.scalar(
         select(Payment).where(Payment.id == payment_id, Payment.merchant_id == user.merchant_id)
     )
@@ -568,6 +836,16 @@ def list_payments(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[PaymentResponse]:
+    """
+    List recent payments for the authenticated merchant.
+
+    Args:
+        user: The authenticated user making the request.
+        db: Database session for querying payment records.
+
+    Returns:
+        A list of up to 50 most recent PaymentResponse objects, ordered by creation time descending.
+    """
     payments = db.scalars(
         select(Payment)
         .where(Payment.merchant_id == user.merchant_id)

@@ -2,6 +2,12 @@ import Link from "next/link";
 
 import { cn } from "@/lib/utils";
 
+/**
+ * Site header component with logo and optional navigation items.
+ *
+ * @param props - Component props containing optional className and children.
+ * @returns A header element with the Voic logo and navigation.
+ */
 export function SiteHeader({
   className,
   children,

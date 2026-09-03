@@ -3,6 +3,12 @@ import { Input as InputPrimitive } from "@base-ui/react/input"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * Input component for form fields with focus and validation states.
+ *
+ * @param props - Component props including className, type, and standard input attributes.
+ * @returns An input element with styled border, focus ring, and validation feedback.
+ */
 function Input({ className, type, ...props }: React.ComponentProps<"input">) {
   return (
     <InputPrimitive

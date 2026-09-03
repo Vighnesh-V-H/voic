@@ -27,6 +27,12 @@ const badgeVariants = cva(
   }
 )
 
+/**
+ * Badge component for displaying status or labels with different variants.
+ *
+ * @param props - Component props including className, variant, render function, and standard span attributes.
+ * @returns A badge span element with the specified variant styling.
+ */
 function Badge({
   className,
   variant = "default",
