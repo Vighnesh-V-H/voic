@@ -20,12 +20,30 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    @field_validator(
+        "database_url",
+        "session_cookie_name",
+        "cors_origins",
+        "frontend_url",
+        "stripe_oauth_redirect_uri",
+        "stripe_oauth_scope",
+        "stripe_mode",
+        mode="before",
+    )
+    @classmethod
+    def use_default_when_empty(cls, value: object, info) -> object:
+        if value is None:
+            return cls.model_fields[info.field_name].default
+        if isinstance(value, str) and not value.strip():
+            return cls.model_fields[info.field_name].default
+        return value
+
     @field_validator("database_url", mode="before")
     @classmethod
     def normalize_postgresql_driver(cls, value: str) -> str:
-        if value.startswith("postgres://"):
+        if isinstance(value, str) and value.startswith("postgres://"):
             return "postgresql+psycopg://" + value.removeprefix("postgres://")
-        if value.startswith("postgresql://"):
+        if isinstance(value, str) and value.startswith("postgresql://"):
             return "postgresql+psycopg://" + value.removeprefix("postgresql://")
         return value
 
