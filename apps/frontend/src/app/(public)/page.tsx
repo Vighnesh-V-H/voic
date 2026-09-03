@@ -39,8 +39,13 @@ export default function Home() {
     <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 pb-16">
       <SiteHeader>
         <nav className="flex items-center gap-2 sm:gap-4" aria-label="Main navigation">
-          <Button variant="ghost" render={<Link href="/auth/login">Log in</Link>} />
           <Button
+            variant="ghost"
+            nativeButton={false}
+            render={<Link href="/auth/login">Log in</Link>}
+          />
+          <Button
+            nativeButton={false}
             render={
               <Link href="/auth/signup">
                 Get started
@@ -66,11 +71,13 @@ export default function Home() {
           <div className="mt-8 flex flex-wrap gap-3">
             <Button
               size="lg"
+              nativeButton={false}
               render={<Link href="/auth/signup">Create your workspace</Link>}
             />
             <Button
               size="lg"
               variant="outline"
+              nativeButton={false}
               render={<Link href="/auth/login">I already have an account</Link>}
             />
           </div>

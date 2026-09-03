@@ -15,7 +15,11 @@ export default function AuthLayout({
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 pb-16">
       <SiteHeader>
-        <Button variant="link" render={<Link href="/">Back to home</Link>} />
+        <Button
+          variant="link"
+          nativeButton={false}
+          render={<Link href="/">Back to home</Link>}
+        />
       </SiteHeader>
       {children}
     </main>
