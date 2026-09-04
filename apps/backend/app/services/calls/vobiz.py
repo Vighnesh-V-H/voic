@@ -211,6 +211,7 @@ def trigger_recovery_call(
             payment_id=payment_id,
             provider="vobiz",
             status="QUEUED",
+            customer_phone=(customer_phone[:32] if customer_phone else None),
         )
         session.add(attempt)
         try:

@@ -44,10 +44,8 @@ export async function loadDashboardData() {
   const [identity, payments, connection] = await Promise.all([
     backendFetch<Identity>("/api/v1/auth/me", cookieHeader),
 
-    // Do not convert payment API failures into an empty array.
     backendFetch<Payment[]>("/api/v1/payments", cookieHeader),
 
-    // A connection lookup failure is different from a real disconnected state.
     backendFetch<StripeConnection>("/api/v1/stripe/connection", cookieHeader),
   ]);
 

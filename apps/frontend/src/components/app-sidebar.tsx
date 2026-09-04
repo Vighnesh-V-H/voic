@@ -92,8 +92,15 @@ export function AppSidebar({ merchantName, userEmail }: AppSidebarProps) {
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex flex-col gap-0.5 px-2 py-1.5 group-data-[collapsible=icon]:hidden">
-              <p className="truncate text-sm font-semibold">{merchantName}</p>
-              <p className="truncate text-xs text-muted-foreground">{userEmail}</p>
+              <p className="truncate text-sm font-semibold" title={merchantName}>
+                {merchantName}
+              </p>
+              <p
+                className="truncate text-xs text-muted-foreground"
+                title={userEmail}
+              >
+                {userEmail}
+              </p>
             </div>
             <SignOutButton />
           </SidebarMenuItem>

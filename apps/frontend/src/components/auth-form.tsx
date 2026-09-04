@@ -103,10 +103,16 @@ export function AuthForm({ mode }: AuthFormProps) {
               minLength={8}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="At least 8 characters"
+              placeholder={isSignup ? "Choose a password" : "Your password"}
               autoComplete={isSignup ? "new-password" : "current-password"}
+              aria-describedby={isSignup ? "password-hint" : undefined}
               required
             />
+            {isSignup ? (
+              <p id="password-hint" className="text-xs text-muted-foreground">
+                Must be at least 8 characters.
+              </p>
+            ) : null}
           </Field>
           {error ? (
             <Alert variant="destructive">

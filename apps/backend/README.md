@@ -65,3 +65,29 @@ Callback authentication: Vobiz posts cannot carry custom headers, so every
 per-call answer/hangup URL carries a signature over its payment and call
 context. `VOICE_CALLBACK_TOKEN` is the long random signing key generated once
 per deployment; the secret itself is never sent to Vobiz or exposed in a URL.
+
+## Conversational voice agent (Vobiz + ElevenLabs WebSockets)
+
+Vobiz places the phone call and opens the signed media stream served by this
+backend. Voic then opens a private ElevenLabs conversational WebSocket, relays
+caller and agent audio concurrently, and executes agent webhook tools. If the
+ElevenLabs connection fails, Voic stops the stream and Vobiz plays the safe
+`<Speak>` fallback from the answer XML.
+
+Setup path:
+
+```text
+1. Expose the backend through public HTTPS/WSS and set VOBIZ_PUBLIC_BASE_URL
+   plus VOICE_WS_BASE_URL to that origin.
+2. Create the ElevenLabs recovery agent. Its first message uses
+   {{payment_id}} / {{amount}} and its three tools are Webhook tools pointing
+   to /api/agent/tools/* with the X-Agent-Token header.
+3. Set ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID, and AGENT_TOOL_TOKEN in .env.
+4. Place a Vobiz recovery call; the answer XML connects Vobiz media to
+   /ws/voice/{call_id} with an HMAC-signed query string.
+```
+
+`ELEVENLABS_PHONE_NUMBER_ID` is only needed for an alternative direct-SIP
+integration; this WebSocket bridge does not use it. Empty WebSocket credentials
+disable the conversational path without breaking payment webhooks or the safe
+voice fallback.
