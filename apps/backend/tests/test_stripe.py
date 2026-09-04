@@ -707,7 +707,7 @@ def test_webhook_handles_checkout_session_completed_for_payment_link(client, fak
     assert events[0]["provider_payment_id"] == "pi_checkout_intent_456"
 
 
-def test_webhook_fallback_to_payment_metadata_when_account_and_context_missing(client, fake_provider, webhook_secret):
+def test_webhook_rejects_event_when_account_and_context_missing(client, fake_provider, webhook_secret):
     payment_id = connected_payment(client, fake_provider)
     payload_dict = json.loads(webhook_payload(payment_id))
     del payload_dict["account"]
@@ -716,8 +716,23 @@ def test_webhook_fallback_to_payment_metadata_when_account_and_context_missing(c
 
     response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
 
-    assert response.status_code == 200
-    assert response.json() == {"status": "processed"}
-    payment = client.get(f"/api/v1/payments/{payment_id}").json()
-    assert payment["status"] == "COMPLETED"
+    assert response.status_code == 400
+    assert response.json()["detail"] == "WEBHOOK_INVALID_PAYLOAD"
+    # No event persisted and no payment touched: metadata must never select a merchant.
+    assert client.get("/api/v1/webhooks/payment-events").json() == []
+    assert client.get(f"/api/v1/payments/{payment_id}").json()["status"] == "PENDING"
+
+
+def test_webhook_metadata_cannot_select_another_merchants_payment(client, fake_provider, webhook_secret):
+    payment_id = connected_payment(client, fake_provider)
+    signup_and_login(client, "second@example.com", "Second Merchant")
+    payload_dict = json.loads(webhook_payload(payment_id))
+    del payload_dict["account"]
+    payload = json.dumps(payload_dict, separators=(",", ":"))
+
+    response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "WEBHOOK_INVALID_PAYLOAD"
+    assert client.get("/api/v1/webhooks/payment-events").json() == []
 

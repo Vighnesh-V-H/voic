@@ -143,7 +143,7 @@ The backend owns the OAuth flow. State is stored server-side, bound to the authe
 
 Stripe's current API guidance recommends using the platform secret key with the connected account ID in the `Stripe-Account` header. Voic therefore stores the connected account ID, mode, granted scope, and connection status, but does not persist or return deprecated OAuth access or refresh tokens.
 
-The platform secret key is server-only and must match the Stripe test mode used for the initial implementation. Reconnection updates the existing merchant/provider connection. Deauthorization or disconnect marks the connection unusable while preserving historical payments and payment events.
+The platform secret key is server-only and must match the Stripe test mode used for the initial implementation. Reconnection to the same account updates the existing merchant/provider connection; reconnecting a different account replaces it and removes the previous account's Voic payments and payment events. Deauthorization or disconnect deletes the merchant's Voic-owned Stripe data (provider connections, payments, and payment events) while preserving the merchant and user records so the merchant stays signed in. Deletion is destructive: the frontend must obtain explicit merchant confirmation before calling disconnect, and the backend docstring records the same warning.
 
 ## 5. Stripe Catalog
 
@@ -161,7 +161,7 @@ All payment creation is scoped to the authenticated merchant's active provider c
 
 ### Payment Link
 
-`POST /api/v1/payment-links` creates a Stripe-hosted Payment Link using an existing one-time Stripe price and quantity. The request includes the Voic payment ID in both Payment Link metadata and `payment_intent_data.metadata`, allowing the resulting PaymentIntent webhook to resolve the local payment. Voic stores and returns the hosted URL.
+`POST /api/v1/payment-links` creates a Stripe-hosted Payment Link using an existing one-time Stripe price and quantity. The request includes the Voic payment ID in both Payment Link metadata and `payment_intent_data.metadata`, allowing the resulting PaymentIntent webhook to correlate the local payment after the merchant boundary is resolved from the signed event account. Voic stores and returns the hosted URL.
 
 The frontend and any future voice agent consume the backend response. They never manufacture Stripe URLs.
 
@@ -205,13 +205,13 @@ Update the matching Payment when supported
 Return 2xx quickly
 ```
 
-Stripe's event `account` field is the authoritative merchant boundary. Customer email, phone, amount, description, frontend data, and arbitrary untrusted values are never used to select a merchant.
+Stripe's event `account` field (or the equivalent top-level `context` field in newer Stripe API versions) is the authoritative merchant boundary. Both are Stripe-signed envelope values. Customer email, phone, amount, description, frontend data, Stripe metadata, and any other untrusted values are never used to select a merchant; metadata (`voic_payment_id`) is only used to correlate a payment after the merchant boundary is resolved. An event with a missing account/context is rejected.
 
 Phase 1 handles at least:
 
 - `payment_intent.succeeded` -> `COMPLETED`
 - `payment_intent.payment_failed` -> `FAILED`
-- `account.application.deauthorized` -> mark the matching provider connection disconnected
+- `account.application.deauthorized` -> delete the matching merchant's Voic-owned Stripe data (explicit delete-with-consent policy, see section 4)
 
 Events may be duplicated or arrive out of order. Each event is persisted independently and no business logic assumes delivery order. Unknown connected accounts, invalid payloads, invalid signatures, and duplicate events have explicit outcomes and never cross merchant boundaries.
 
@@ -270,7 +270,7 @@ Credentials and sensitive data follow these rules:
 
 - Platform secret and webhook secret come from environment or secret management.
 - Secrets are never committed, logged, or returned to the frontend.
-- Raw webhook payloads are restricted to developer debugging and are not normal merchant API data.
+- Raw webhook payloads are retained for restricted developer debugging only: stored server-side, never returned by merchant APIs, never logged, and never sent to the frontend. See ADR-0003 for the retention policy.
 - Payment metadata contains only non-sensitive identifiers.
 - Test mode uses synthetic data only.
 
@@ -296,10 +296,11 @@ Automated tests exercise external behavior at the API boundary using a fake prov
 - PaymentIntent and Payment Link creation from existing prices
 - Metadata-based payment correlation
 - Valid and invalid raw-body webhook signatures
-- Malformed payloads and unknown connected accounts
+- Malformed payloads, missing account/context, and unknown connected accounts
 - Duplicate event idempotency and out-of-order event persistence
 - Success and failure payment-status synchronization
-- Deauthorization and disconnect preservation of historical data
+- Deauthorization and disconnect deletion of Voic-owned Stripe data with explicit merchant confirmation
+- Metadata can never select a merchant (correlation only after the signed account boundary is resolved)
 - Cross-merchant access rejection
 
 Manual acceptance runs entirely in Stripe Test Mode. The Stripe CLI or another temporary public HTTPS endpoint may forward Connect events to local development. No production credentials or real payments are required.
@@ -327,7 +328,7 @@ Phase 1 is complete when:
 - A PaymentIntent and a Payment Link can be created from an existing one-time price.
 - The centralized Connect webhook verifies the raw request body.
 - The event's connected account maps to exactly one merchant.
-- Duplicate events are idempotent and raw verified payloads are retained securely.
+- Duplicate events are idempotent and raw verified payloads are retained per the restricted-debugging policy (ADR-0003).
 - `payment_intent.succeeded` and `payment_intent.payment_failed` synchronize Payment status.
 - Merchant isolation is covered by automated tests.
 - A Stripe Test Mode payment failure can be forwarded to Voic and inspected in the database or dashboard.
