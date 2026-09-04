@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import router as auth_router
 from app.api.stripe import payment_router, router as stripe_router
+from app.api.voice import router as voice_router
 from app.api.webhooks import router as webhooks_router
 from app.core.config import get_settings
 
@@ -20,6 +21,7 @@ app.include_router(auth_router, prefix="/api/v1")
 app.include_router(stripe_router, prefix="/api/v1")
 app.include_router(payment_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
+app.include_router(voice_router, prefix="/api/v1")
 
 
 @app.get("/health")

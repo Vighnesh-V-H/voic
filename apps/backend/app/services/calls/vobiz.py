@@ -7,17 +7,20 @@ single outbound call to the customer phone stored on the payment event via::
     POST https://api.vobiz.ai/api/v1/Account/{auth_id}/Call/
 
 Required headers are ``X-Auth-ID`` / ``X-Auth-Token``; the body carries
-``from`` (the merchant's Vobiz caller ID), ``to`` (customer phone), and
-``answer_url`` (serves the Voice XML flow once the call connects).
+    ``from`` (the merchant's Vobiz caller ID), ``to`` (customer phone), and a
+    per-payment ``answer_url`` (serves the Voice XML flow once the call connects).
 
 Without Vobiz credentials the trigger logs and skips so webhooks keep
 working in local development. This module never raises to the webhook.
 """
 
+import hashlib
+import hmac
 import json
 import urllib.request
 from datetime import UTC, datetime
 from logging import getLogger
+from urllib.parse import urlencode
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -33,6 +36,7 @@ logger = getLogger(__name__)
 CALL_TRIGGER_EVENTS = frozenset({"payment_intent.payment_failed"})
 VOBIZ_API_BASE = "https://api.vobiz.ai/api/v1"
 REQUEST_TIMEOUT_SECONDS = 10
+RECOVERY_ANSWER_PATH = "/api/v1/voice/answer"
 
 
 class VobizCallError(Exception):
@@ -50,19 +54,44 @@ def is_configured(settings: Settings) -> bool:
         settings.vobiz_auth_id.strip()
         and settings.vobiz_auth_token.strip()
         and settings.vobiz_caller_id.strip()
-        and settings.vobiz_answer_url.strip()
         and settings.vobiz_public_base_url.strip()
         and settings.voice_callback_token.strip()
     )
 
 
-def place_call(settings: Settings, *, to: str) -> str:
+def callback_signature(token: str, payment_id: str, attempt_id: str) -> str:
+    """Return the HMAC used to bind a callback URL to one call attempt."""
+    return hmac.new(
+        token.encode("utf-8"),
+        f"{payment_id}:{attempt_id}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def recovery_answer_url(settings: Settings, payment_id: str, attempt_id: str) -> str:
+    """Build the authenticated, per-payment answer callback URL."""
+    base_url = settings.vobiz_public_base_url.strip().rstrip("/")
+    query = urlencode(
+        {
+            "payment_id": payment_id,
+            "attempt_id": attempt_id,
+            "signature": callback_signature(
+                settings.voice_callback_token.strip(), payment_id, attempt_id
+            ),
+        }
+    )
+    return f"{base_url}{RECOVERY_ANSWER_PATH}?{query}"
+
+
+def place_call(settings: Settings, *, to: str, payment_id: str, attempt_id: str) -> str:
     """Place one outbound call to ``to`` and return the provider call ID.
 
     Args:
         settings: Application settings carrying the Vobiz credentials,
-            caller ID, and answer URL.
+            caller ID, public callback base URL, and callback token.
         to: Destination phone number in E.164 format.
+        payment_id: Voic payment ID carried by the callback URL.
+        attempt_id: Voic call-attempt ID bound to the callback URL.
 
     Returns:
         The Vobiz request/call UUID, or an empty string when absent.
@@ -74,7 +103,7 @@ def place_call(settings: Settings, *, to: str) -> str:
     body = {
         "from": settings.vobiz_caller_id.strip(),
         "to": to,
-        "answer_url": settings.vobiz_answer_url.strip(),
+        "answer_url": recovery_answer_url(settings, payment_id, attempt_id),
         "answer_method": "POST",
     }
     request = urllib.request.Request(
@@ -175,7 +204,12 @@ def trigger_recovery_call(
             return "skipped:already-attempted"
 
         try:
-            call_id = place_call(settings, to=customer_phone)
+            call_id = place_call(
+                settings,
+                to=customer_phone,
+                payment_id=payment_id,
+                attempt_id=attempt.id,
+            )
         except VobizCallError:
             logger.exception("Recovery call failed for payment %s", payment_id)
             attempt.status = "FAILED"

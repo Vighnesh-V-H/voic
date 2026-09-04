@@ -8,11 +8,15 @@ Implemented (v1): the webhook sets a `failed_transition` flag when the event
 flips status to `FAILED`, commits, then enqueues
 `app/services/calls/vobiz.py:trigger_recovery_call` via FastAPI
 `BackgroundTasks`. The trigger calls Vobiz `POST /Account/{auth_id}/Call/`
-with `from` = `VOBIZ_CALLER_ID`, `to` = customer phone, `answer_url` =
-`VOBIZ_ANSWER_URL`. Before dialing, it persists a `CallAttempt` claim unique
-to the merchant and payment, then records the provider ID and placement
-status. Without credentials it logs `skipped:vobiz-not-configured` and the
-webhook still returns 2xx. Covered by `apps/backend/tests/test_call_trigger.py`.
+with `from` = `VOBIZ_CALLER_ID`, `to` = customer phone, and a per-payment
+`/api/v1/voice/answer?payment_id=...&attempt_id=...&signature=...` answer URL
+built from `VOBIZ_PUBLIC_BASE_URL`. The signature binds the URL to the
+merchant-owned payment and call attempt without exposing the callback secret.
+Before dialing, it persists a `CallAttempt` claim unique to the merchant and
+payment, then records the provider ID and placement status. Without credentials
+it logs `skipped:vobiz-not-configured` and the webhook still returns 2xx.
+Covered by `apps/backend/tests/test_call_trigger.py` and
+`apps/backend/tests/test_voice_answer.py`.
 
 ## Rule
 

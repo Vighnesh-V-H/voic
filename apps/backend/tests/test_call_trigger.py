@@ -71,8 +71,8 @@ def fake_provider():
 def recorded_calls(monkeypatch):
     calls: list[dict] = []
 
-    def fake_place_call(settings, *, to: str) -> str:
-        calls.append({"to": to})
+    def fake_place_call(settings, *, to: str, payment_id: str, attempt_id: str) -> str:
+        calls.append({"to": to, "payment_id": payment_id})
         return "call_test_123"
 
     monkeypatch.setattr(vobiz, "place_call", fake_place_call)
@@ -118,7 +118,7 @@ def test_failed_payment_with_phone_triggers_vobiz_call(client, fake_provider, vo
 
     assert response.status_code == 200
     assert response.json() == {"status": "processed"}
-    assert recorded_calls == [{"to": CUSTOMER_PHONE}]
+    assert recorded_calls == [{"to": CUSTOMER_PHONE, "payment_id": payment_id}]
     assert client.get(f"/api/v1/payments/{payment_id}").json()["status"] == "FAILED"
 
 
@@ -165,7 +165,7 @@ def test_duplicate_failed_event_calls_only_once(client, fake_provider, vobiz_sec
 
     assert first.json() == {"status": "processed"}
     assert second.json() == {"status": "duplicate"}
-    assert recorded_calls == [{"to": CUSTOMER_PHONE}]
+    assert recorded_calls == [{"to": CUSTOMER_PHONE, "payment_id": payment_id}]
 
 
 def test_distinct_failed_events_persist_one_attempt_and_call_once(
@@ -179,7 +179,7 @@ def test_distinct_failed_events_persist_one_attempt_and_call_once(
 
     assert first.json() == {"status": "processed"}
     assert second.json() == {"status": "processed"}
-    assert recorded_calls == [{"to": CUSTOMER_PHONE}]
+    assert recorded_calls == [{"to": CUSTOMER_PHONE, "payment_id": payment_id}]
     attempts = db_session.query(CallAttempt).filter(CallAttempt.payment_id == payment_id).all()
     assert len(attempts) == 1
     assert attempts[0].provider == "vobiz"
@@ -283,7 +283,7 @@ def test_trigger_skips_when_vobiz_unconfigured():
 
 
 def test_trigger_surfaces_provider_error_as_skip(client, fake_provider, vobiz_secret, monkeypatch):
-    def boom(settings, *, to: str) -> str:
+    def boom(settings, *, to: str, payment_id: str, attempt_id: str) -> str:
         raise VobizCallError("down")
 
     monkeypatch.setattr(vobiz, "place_call", boom)
