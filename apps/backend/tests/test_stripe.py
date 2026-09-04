@@ -23,7 +23,7 @@ class FakeStripeProvider:
         self.price_list_calls: list[str] = []
         self.price_calls: list[tuple[str, str]] = []
         self.payment_intent_calls: list[tuple[str, int, str, dict[str, str]]] = []
-        self.payment_link_calls: list[tuple[str, str, int, dict[str, str]]] = []
+        self.payment_link_calls: list[tuple[str, str, int, dict[str, str], str | None]] = []
         self.livemode = False
         self.account_id = "acct_test_123"
 
@@ -49,6 +49,8 @@ class FakeStripeProvider:
 
     def get_price(self, account_id: str, price_id: str):
         self.price_calls.append((account_id, price_id))
+        if price_id.startswith("price_rec"):
+            return {"id": price_id, "type": "recurring", "unit_amount": 1500, "currency": "usd"}
         return {"id": price_id, "type": "one_time", "unit_amount": 2500, "currency": "usd"}
 
     def list_prices(self, account_id: str):
@@ -61,15 +63,25 @@ class FakeStripeProvider:
                 "unit_amount": 2500,
                 "currency": "usd",
                 "active": True,
-            }
+            },
+            {
+                "id": "price_rec_456",
+                "product": "prod_123",
+                "type": "recurring",
+                "unit_amount": 1500,
+                "currency": "usd",
+                "active": True,
+            },
         ]
 
     def create_payment_intent(self, account_id: str, amount: int, currency: str, metadata, idempotency_key: str):
         self.payment_intent_calls.append((account_id, amount, currency, dict(metadata)))
         return {"id": "pi_test_123", "client_secret": "pi_secret_123"}
 
-    def create_payment_link(self, account_id: str, price_id: str, quantity: int, metadata, idempotency_key: str):
-        self.payment_link_calls.append((account_id, price_id, quantity, dict(metadata)))
+    def create_payment_link(
+        self, account_id: str, price_id: str, quantity: int, metadata, idempotency_key: str, price_type=None
+    ):
+        self.payment_link_calls.append((account_id, price_id, quantity, dict(metadata), price_type))
         return {
             "id": "plink_test_123",
             "url": "https://buy.stripe.com/test_link",
@@ -370,7 +382,15 @@ def test_prices_are_read_from_connected_stripe_account(client, fake_provider):
             "currency": "usd",
             "active": True,
             "type": "one_time",
-        }
+        },
+        {
+            "id": "price_rec_456",
+            "product_id": "prod_123",
+            "unit_amount": 1500,
+            "currency": "usd",
+            "active": True,
+            "type": "recurring",
+        },
     ]
     assert fake_provider.price_list_calls == ["acct_test_123"]
 
@@ -433,7 +453,42 @@ def test_payment_link_uses_existing_price_and_returns_hosted_url(client, fake_pr
     assert body["status"] == "PENDING"
     assert fake_provider.payment_link_calls[0][0:3] == ("acct_test_123", "price_123", 2)
     assert fake_provider.payment_link_calls[0][3]["voic_payment_id"] == body["id"]
+    assert fake_provider.payment_link_calls[0][4] == "one_time"
     assert client.get(f"/api/v1/payment-links/{body['id']}").json()["url"] == "https://buy.stripe.com/test_link"
+
+
+def test_payment_accepts_recurring_price_as_one_off_charge(client, fake_provider):
+    signup_and_login(client, "owner@example.com", "Acme Store")
+    state = connect_state(client)
+    client.get(f"/api/v1/stripe/callback?code=oauth-code&state={state}", follow_redirects=False)
+
+    response = client.post("/api/v1/payments", json={"price_id": "price_rec_456", "quantity": 2})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["provider_price_id"] == "price_rec_456"
+    assert body["amount"] == 3000
+    assert body["currency"] == "usd"
+    assert body["status"] == "PENDING"
+    assert fake_provider.payment_intent_calls[0][0:3] == ("acct_test_123", 3000, "usd")
+
+
+def test_payment_link_accepts_recurring_price(client, fake_provider):
+    signup_and_login(client, "owner@example.com", "Acme Store")
+    state = connect_state(client)
+    client.get(f"/api/v1/stripe/callback?code=oauth-code&state={state}", follow_redirects=False)
+
+    response = client.post("/api/v1/payment-links", json={"price_id": "price_rec_456", "quantity": 1})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["provider_payment_link_id"] == "plink_test_123"
+    assert body["url"] == "https://buy.stripe.com/test_link"
+    assert body["amount"] == 1500
+    assert body["status"] == "PENDING"
+    assert fake_provider.payment_link_calls[0][0:3] == ("acct_test_123", "price_rec_456", 1)
+    assert fake_provider.payment_link_calls[0][3]["voic_payment_id"] == body["id"]
+    assert fake_provider.payment_link_calls[0][4] == "recurring"
 
 
 def signed_headers(payload: str) -> dict[str, str]:
@@ -473,18 +528,20 @@ def connected_payment(client, fake_provider) -> str:
 
 def webhook_payload(
     payment_id: str,
-    event_type: str = "payment_intent.succeeded",
+    event_type: str = "payment_intent.payment_failed",
     account_id: str = "acct_test_123",
     event_id: str | None = None,
+    created: int | None = None,
 ) -> str:
     """
     Generate a fake Stripe webhook event payload for testing.
 
     Args:
         payment_id: The Voic payment ID to include in metadata.
-        event_type: The Stripe event type (e.g., payment_intent.succeeded).
+        event_type: The Stripe event type (e.g., payment_intent.payment_failed).
         account_id: The Stripe account ID for the event.
         event_id: Optional event ID (generated if not provided).
+        created: Optional Unix timestamp (defaults to now).
 
     Returns:
         A JSON-encoded webhook event payload string.
@@ -494,7 +551,7 @@ def webhook_payload(
             "id": event_id or ("evt_test_123" if event_type.endswith("succeeded") else "evt_test_failed"),
             "object": "event",
             "account": account_id,
-            "created": int(time.time()),
+            "created": created if created is not None else int(time.time()),
             "type": event_type,
             "data": {
                 "object": {
@@ -509,9 +566,53 @@ def webhook_payload(
     )
 
 
+def checkout_completed_payload(
+    payment_id: str,
+    event_id: str = "evt_checkout_valid",
+    account_id: str = "acct_test_123",
+    created: int | None = None,
+    payment_intent_id: str = "pi_test_123",
+) -> str:
+    """
+    Generate a checkout.session.completed payload for testing.
+
+    Args:
+        payment_id: The Voic payment ID to include in metadata.
+        event_id: The Stripe event ID.
+        account_id: The Stripe account ID for the event.
+        created: Optional Unix timestamp (defaults to now).
+        payment_intent_id: The PaymentIntent ID the session created.
+
+    Returns:
+        A JSON-encoded webhook event payload string.
+    """
+    return json.dumps(
+        {
+            "id": event_id,
+            "object": "event",
+            "account": account_id,
+            "created": created if created is not None else int(time.time()),
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "id": "cs_test_session_valid",
+                    "object": "checkout.session",
+                    "payment_intent": payment_intent_id,
+                    "amount_total": 2500,
+                    "currency": "usd",
+                    "payment_status": "paid",
+                    "status": "complete",
+                    "metadata": {"voic_payment_id": payment_id},
+                }
+            },
+        },
+        separators=(",", ":"),
+    )
+
+
 def test_valid_webhook_persists_event_and_completes_payment(client, fake_provider, webhook_secret):
     payment_id = connected_payment(client, fake_provider)
-    payload = webhook_payload(payment_id)
+    payload = checkout_completed_payload(payment_id)
 
     response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
 
@@ -521,8 +622,42 @@ def test_valid_webhook_persists_event_and_completes_payment(client, fake_provide
     assert payment["status"] == "COMPLETED"
     events = client.get("/api/v1/webhooks/payment-events")
     assert events.status_code == 200
-    assert events.json()[0]["event_type"] == "payment_intent.succeeded"
+    assert events.json()[0]["event_type"] == "checkout.session.completed"
+    assert events.json()[0]["provider_payment_id"] == "pi_test_123"
+    assert events.json()[0]["provider_price_id"] == "price_123"
     assert "raw_payload" not in events.json()[0]
+
+
+def test_stored_event_without_linked_payment_has_no_price(client, fake_provider, webhook_secret):
+    # Payments created outside Voic still store the event, but with no product mapping.
+    signup_and_login(client, "owner@example.com", "Acme Store")
+    state = connect_state(client)
+    client.get(f"/api/v1/stripe/callback?code=oauth-code&state={state}", follow_redirects=False)
+    payload = checkout_completed_payload(
+        "not-a-voic-payment", event_id="evt_checkout_outside", payment_intent_id="pi_outside_voic"
+    )
+
+    response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "processed"}
+    events = client.get("/api/v1/webhooks/payment-events").json()
+    assert len(events) == 1
+    assert events[0]["event_type"] == "checkout.session.completed"
+    assert events[0]["provider_price_id"] is None
+
+
+def test_payment_intent_succeeded_is_ignored(client, fake_provider, webhook_secret):
+    # Only checkout.session.completed and payment_intent.payment_failed are stored.
+    payment_id = connected_payment(client, fake_provider)
+    payload = webhook_payload(payment_id, "payment_intent.succeeded", event_id="evt_succeeded_ignored")
+
+    response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+    assert client.get(f"/api/v1/payments/{payment_id}").json()["status"] == "PENDING"
+    assert client.get("/api/v1/webhooks/payment-events").json() == []
 
 
 def test_failed_webhook_updates_payment_status(client, fake_provider, webhook_secret):
@@ -533,17 +668,34 @@ def test_failed_webhook_updates_payment_status(client, fake_provider, webhook_se
 
     assert response.status_code == 200
     assert client.get(f"/api/v1/payments/{payment_id}").json()["status"] == "FAILED"
+    events = client.get("/api/v1/webhooks/payment-events").json()
+    assert events[0]["event_type"] == "payment_intent.payment_failed"
+    assert events[0]["provider_price_id"] == "price_123"
 
 
 def test_late_failure_does_not_downgrade_completed_payment(client, fake_provider, webhook_secret):
     payment_id = connected_payment(client, fake_provider)
-    succeeded_payload = webhook_payload(payment_id)
-    failed_payload = webhook_payload(payment_id, "payment_intent.payment_failed")
+    now = int(time.time())
+    succeeded_payload = checkout_completed_payload(payment_id, event_id="evt_checkout_tie", created=now)
+    failed_payload = webhook_payload(
+        payment_id, "payment_intent.payment_failed", event_id="evt_failed_tie", created=now
+    )
 
     client.post("/api/v1/webhooks/stripe", content=succeeded_payload, headers=signed_headers(succeeded_payload))
     client.post("/api/v1/webhooks/stripe", content=failed_payload, headers=signed_headers(failed_payload))
 
+    # Tied timestamps keep COMPLETED, but a strictly later failure supersedes it.
     assert client.get(f"/api/v1/payments/{payment_id}").json()["status"] == "COMPLETED"
+    later_failed_payload = webhook_payload(
+        payment_id, "payment_intent.payment_failed", event_id="evt_failed_later", created=now + 120
+    )
+    client.post(
+        "/api/v1/webhooks/stripe",
+        content=later_failed_payload,
+        headers=signed_headers(later_failed_payload),
+    )
+
+    assert client.get(f"/api/v1/payments/{payment_id}").json()["status"] == "FAILED"
 
 
 def test_deauthorization_removes_merchant_stripe_data(client, fake_provider, webhook_secret):
@@ -642,7 +794,7 @@ def test_webhook_rejects_malformed_payload(client, fake_provider, webhook_secret
 
 def test_webhook_supports_context_field_instead_of_account(client, fake_provider, webhook_secret):
     payment_id = connected_payment(client, fake_provider)
-    payload_dict = json.loads(webhook_payload(payment_id))
+    payload_dict = json.loads(webhook_payload(payment_id, event_id="evt_failed_ctx"))
     del payload_dict["account"]
     payload_dict["context"] = "acct_test_123"
     payload = json.dumps(payload_dict, separators=(",", ":"))
@@ -652,7 +804,7 @@ def test_webhook_supports_context_field_instead_of_account(client, fake_provider
     assert response.status_code == 200
     assert response.json() == {"status": "processed"}
     payment = client.get(f"/api/v1/payments/{payment_id}").json()
-    assert payment["status"] == "COMPLETED"
+    assert payment["status"] == "FAILED"
 
 
 def test_webhook_handles_checkout_session_completed_for_payment_link(client, fake_provider, webhook_secret):
@@ -705,13 +857,23 @@ def test_webhook_handles_checkout_session_completed_for_payment_link(client, fak
     assert events[0]["event_type"] == "checkout.session.completed"
     assert events[0]["amount"] == 2500
     assert events[0]["provider_payment_id"] == "pi_checkout_intent_456"
+    assert events[0]["provider_price_id"] == "price_123"
 
 
 def test_webhook_rejects_event_when_account_and_context_missing(client, fake_provider, webhook_secret):
     payment_id = connected_payment(client, fake_provider)
-    payload_dict = json.loads(webhook_payload(payment_id))
+    # A second connected account makes the account-less event ambiguous, so the
+    # Stripe-asserted provider reference must resolve it. An unknown reference
+    # must be rejected: metadata alone must never select a merchant.
+    signup_and_login(client, "second@example.com", "Second Merchant")
+    fake_provider.account_id = "acct_test_456"
+    second_state = connect_state(client)
+    client.get(f"/api/v1/stripe/callback?code=second&state={second_state}", follow_redirects=False)
+    payload_dict = json.loads(webhook_payload(payment_id, event_id="evt_unknown_ref"))
     del payload_dict["account"]
     assert "context" not in payload_dict
+    # Unknown provider object: metadata alone must never route the event.
+    payload_dict["data"]["object"]["id"] = "pi_unknown_no_such_payment"
     payload = json.dumps(payload_dict, separators=(",", ":"))
 
     response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
@@ -720,19 +882,336 @@ def test_webhook_rejects_event_when_account_and_context_missing(client, fake_pro
     assert response.json()["detail"] == "WEBHOOK_INVALID_PAYLOAD"
     # No event persisted and no payment touched: metadata must never select a merchant.
     assert client.get("/api/v1/webhooks/payment-events").json() == []
+    client.post("/api/v1/auth/login", json={"email": "owner@example.com", "password": "correct horse battery"})
     assert client.get(f"/api/v1/payments/{payment_id}").json()["status"] == "PENDING"
+    assert client.get("/api/v1/webhooks/payment-events").json() == []
 
 
-def test_webhook_metadata_cannot_select_another_merchants_payment(client, fake_provider, webhook_secret):
+def test_webhook_provider_reference_routes_to_owning_merchant(client, fake_provider, webhook_secret):
     payment_id = connected_payment(client, fake_provider)
     signup_and_login(client, "second@example.com", "Second Merchant")
-    payload_dict = json.loads(webhook_payload(payment_id))
+    # No signed account, no metadata at all: the Stripe-asserted provider
+    # object ID still routes the event to the owning merchant.
+    payload_dict = json.loads(webhook_payload(payment_id, event_id="evt_failed_routed"))
     del payload_dict["account"]
+    del payload_dict["data"]["object"]["metadata"]
     payload = json.dumps(payload_dict, separators=(",", ":"))
 
     response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "WEBHOOK_INVALID_PAYLOAD"
+    assert response.status_code == 200
+    assert response.json() == {"status": "processed"}
+    # Second merchant sees nothing; the owning merchant's payment failed.
+    assert client.get("/api/v1/webhooks/payment-events").json() == []
+    client.post("/api/v1/auth/login", json={"email": "owner@example.com", "password": "correct horse battery"})
+    assert client.get(f"/api/v1/payments/{payment_id}").json()["status"] == "FAILED"
+    assert len(client.get("/api/v1/webhooks/payment-events").json()) == 1
+
+
+def connected_subscription_link(client, fake_provider) -> tuple[str, str]:
+    """
+    Create a merchant, connect Stripe, and create a recurring-price payment link.
+
+    Args:
+        client: The test client for making HTTP requests.
+        fake_provider: The fake Stripe provider fixture.
+
+    Returns:
+        A tuple of (Voic payment ID, provider payment link ID).
+    """
+    signup_and_login(client, "owner@example.com", "Acme Store")
+    state = connect_state(client)
+    client.get(f"/api/v1/stripe/callback?code=oauth-code&state={state}", follow_redirects=False)
+    body = client.post("/api/v1/payment-links", json={"price_id": "price_rec_456"}).json()
+    return body["id"], body["provider_payment_link_id"]
+
+
+def subscription_checkout_payload(
+    payment_id: str,
+    link_id: str,
+    subscription_id: str = "sub_test_123",
+    event_id: str = "evt_sub_checkout",
+    include_account: bool = False,
+) -> str:
+    """
+    Generate a subscription-mode checkout.session.completed payload.
+
+    Args:
+        payment_id: The Voic payment ID for link metadata.
+        link_id: The provider payment link ID.
+        subscription_id: The Stripe subscription ID created by checkout.
+        event_id: The Stripe event ID.
+        include_account: Whether to include the signed account envelope.
+
+    Returns:
+        A JSON-encoded webhook event payload string.
+    """
+    event: dict[str, object] = {
+        "id": event_id,
+        "object": "event",
+        "created": int(time.time()),
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "id": "cs_test_sub_123",
+                "object": "checkout.session",
+                "mode": "subscription",
+                "payment_link": link_id,
+                "subscription": subscription_id,
+                "invoice": "in_test_123",
+                "amount_total": 1500,
+                "currency": "usd",
+                "payment_status": "paid",
+                "status": "complete",
+                "metadata": {"voic_payment_id": payment_id},
+            }
+        },
+    }
+    if include_account:
+        event["account"] = "acct_test_123"
+    return json.dumps(event, separators=(",", ":"))
+
+
+def invoice_payload(
+    event_type: str,
+    subscription_id: str = "sub_test_123",
+    event_id: str | None = None,
+    include_account: bool = False,
+    new_api_shape: bool = False,
+    created_offset: int = 0,
+) -> str:
+    """
+    Generate an invoice webhook event payload.
+
+    Args:
+        event_type: The Stripe event type (e.g., invoice.payment_succeeded).
+        subscription_id: The Stripe subscription ID the invoice belongs to.
+        event_id: Optional event ID (generated if not provided).
+        include_account: Whether to include the signed account envelope.
+        new_api_shape: Use parent.subscription_details instead of top-level subscription.
+        created_offset: Seconds added to the event timestamp (for ordering tests).
+
+    Returns:
+        A JSON-encoded webhook event payload string.
+    """
+    invoice: dict[str, object] = {
+        "id": "in_test_123",
+        "object": "invoice",
+        "amount_paid": 1500 if event_type != "invoice.payment_failed" else 0,
+        "amount_due": 1500,
+        "currency": "usd",
+    }
+    if new_api_shape:
+        invoice["parent"] = {"subscription_details": {"subscription": subscription_id}}
+    else:
+        invoice["subscription"] = subscription_id
+    event: dict[str, object] = {
+        "id": event_id or f"evt_{event_type.replace('.', '_')}",
+        "object": "event",
+        "created": int(time.time()) + created_offset,
+        "type": event_type,
+        "data": {"object": invoice},
+    }
+    if include_account:
+        event["account"] = "acct_test_123"
+    return json.dumps(event, separators=(",", ":"))
+
+
+def post_webhook(client, payload: str):
+    return client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
+
+
+def test_subscription_checkout_without_account_marks_paid_and_captures_subscription(
+    client, fake_provider, webhook_secret
+):
+    payment_id, link_id = connected_subscription_link(client, fake_provider)
+    payload = subscription_checkout_payload(payment_id, link_id)
+
+    response = post_webhook(client, payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "processed"}
+    assert client.get(f"/api/v1/payment-links/{payment_id}").json()["status"] == "COMPLETED"
+
+
+def test_invoice_succeeded_without_account_is_ignored(client, fake_provider, webhook_secret):
+    payment_id, link_id = connected_subscription_link(client, fake_provider)
+    post_webhook(client, subscription_checkout_payload(payment_id, link_id))
+    payload = invoice_payload("invoice.payment_succeeded")
+
+    response = post_webhook(client, payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+    # The earlier checkout completed the payment; the invoice changes nothing.
+    assert client.get(f"/api/v1/payment-links/{payment_id}").json()["status"] == "COMPLETED"
+    events = client.get("/api/v1/webhooks/payment-events").json()
+    assert {event["event_type"] for event in events} == {"checkout.session.completed"}
+
+
+def test_invoice_succeeded_with_new_api_shape_is_ignored(client, fake_provider, webhook_secret):
+    payment_id, link_id = connected_subscription_link(client, fake_provider)
+    post_webhook(client, subscription_checkout_payload(payment_id, link_id))
+    payload = invoice_payload("invoice.paid", new_api_shape=True, event_id="evt_invoice_paid_new_shape")
+
+    response = post_webhook(client, payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+    assert client.get(f"/api/v1/payment-links/{payment_id}").json()["status"] == "COMPLETED"
+
+
+def test_invoice_failed_without_account_is_ignored(client, fake_provider, webhook_secret):
+    payment_id, link_id = connected_subscription_link(client, fake_provider)
+    post_webhook(client, subscription_checkout_payload(payment_id, link_id))
+    # Later timestamp, but invoice events are not stored: the earlier checkout stands.
+    payload = invoice_payload("invoice.payment_failed", created_offset=60)
+
+    response = post_webhook(client, payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+    assert client.get(f"/api/v1/payment-links/{payment_id}").json()["status"] == "COMPLETED"
+
+
+def test_invoice_with_signed_account_is_ignored(client, fake_provider, webhook_secret):
+    payment_id, link_id = connected_subscription_link(client, fake_provider)
+    post_webhook(client, subscription_checkout_payload(payment_id, link_id, include_account=True))
+    payload = invoice_payload("invoice.payment_succeeded", include_account=True)
+
+    response = post_webhook(client, payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+    assert client.get(f"/api/v1/payment-links/{payment_id}").json()["status"] == "COMPLETED"
+
+
+def test_invoice_for_unknown_subscription_without_account_is_ignored(client, fake_provider, webhook_secret):
+    connected_subscription_link(client, fake_provider)
+    payload = invoice_payload("invoice.payment_succeeded", subscription_id="sub_unknown")
+
+    response = post_webhook(client, payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+    assert client.get("/api/v1/webhooks/payment-events").json() == []
+
+
+def invoice_payment_payload(
+    event_type: str = "invoice_payment.paid",
+    invoice_id: str = "in_test_123",
+    event_id: str | None = None,
+    include_account: bool = False,
+    created_offset: int = 0,
+) -> str:
+    """
+    Generate a new-model invoice_payment webhook event payload.
+
+    Args:
+        event_type: The Stripe event type (e.g., invoice_payment.paid).
+        invoice_id: The Stripe invoice ID the payment belongs to.
+        event_id: Optional event ID (generated if not provided).
+        include_account: Whether to include the signed account envelope.
+        created_offset: Seconds added to the event timestamp.
+
+    Returns:
+        A JSON-encoded webhook event payload string.
+    """
+    event: dict[str, object] = {
+        "id": event_id or f"evt_{event_type.replace('.', '_')}",
+        "object": "event",
+        "created": int(time.time()) + created_offset,
+        "type": event_type,
+        "data": {
+            "object": {
+                "id": "invpay_test_123",
+                "object": "invoice_payment",
+                "invoice": invoice_id,
+                "payment": {"type": "payment_intent", "payment_intent": "pi_invoice_123"},
+                "amount_paid": 1500,
+                "currency": "usd",
+            }
+        },
+    }
+    if include_account:
+        event["account"] = "acct_test_123"
+    return json.dumps(event, separators=(",", ":"))
+
+
+def test_invoice_payment_paid_without_account_is_ignored(client, fake_provider, webhook_secret):
+    payment_id, link_id = connected_subscription_link(client, fake_provider)
+    post_webhook(client, subscription_checkout_payload(payment_id, link_id))
+    payload = invoice_payment_payload()
+
+    response = post_webhook(client, payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+    assert client.get(f"/api/v1/payment-links/{payment_id}").json()["status"] == "COMPLETED"
+
+
+def test_invoice_payment_failed_without_account_is_ignored(client, fake_provider, webhook_secret):
+    payment_id, link_id = connected_subscription_link(client, fake_provider)
+    post_webhook(client, subscription_checkout_payload(payment_id, link_id))
+    payload = invoice_payment_payload("invoice_payment.failed", created_offset=60)
+
+    response = post_webhook(client, payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+    assert client.get(f"/api/v1/payment-links/{payment_id}").json()["status"] == "COMPLETED"
+
+
+def test_invoice_payment_for_unknown_invoice_without_account_is_ignored(client, fake_provider, webhook_secret):
+    connected_subscription_link(client, fake_provider)
+    payload = invoice_payment_payload(invoice_id="in_unknown")
+
+    response = post_webhook(client, payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+    assert client.get("/api/v1/webhooks/payment-events").json() == []
+
+
+def test_payment_intent_for_uncaptured_invoice_pi_is_ignored_without_metadata(
+    client, fake_provider, webhook_secret
+):
+    # payment_intent.succeeded is not stored, even when account-less routing
+    # would otherwise resolve the merchant via the single-connection fallback.
+    payment_id, link_id = connected_subscription_link(client, fake_provider)
+    post_webhook(client, subscription_checkout_payload(payment_id, link_id))
+    post_webhook(client, invoice_payment_payload())
+    # The invoice's underlying PI was never captured (invoice events are ignored),
+    # and succeeded events are not stored.
+    payload_dict = json.loads(webhook_payload(payment_id, "payment_intent.succeeded"))
+    del payload_dict["account"]
+    payload_dict["data"]["object"]["id"] = "pi_invoice_123"
+    payload_dict["data"]["object"].pop("metadata", None)
+    payload = json.dumps(payload_dict, separators=(",", ":"))
+
+    response = post_webhook(client, payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+    assert client.get(f"/api/v1/payment-links/{payment_id}").json()["status"] == "COMPLETED"
+
+
+def test_payment_method_event_without_account_is_ignored(client, fake_provider, webhook_secret):
+    signup_and_login(client, "owner@example.com", "Acme Store")
+    payload = json.dumps(
+        {
+            "id": "evt_pm_123",
+            "object": "event",
+            "created": int(time.time()),
+            "type": "payment_method.attached",
+            "data": {"object": {"id": "pm_test_123", "object": "payment_method"}},
+        },
+        separators=(",", ":"),
+    )
+
+    response = post_webhook(client, payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
     assert client.get("/api/v1/webhooks/payment-events").json() == []
 

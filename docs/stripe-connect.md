@@ -102,15 +102,36 @@ Important events include:
 ```text
 payment_intent.succeeded
 payment_intent.payment_failed
+charge.succeeded
+charge.failed
+checkout.session.completed
+checkout.session.async_payment_failed
+checkout.session.expired
+invoice.paid
+invoice.payment_failed
 ```
 
 VOIC should:
 
 1. Verify the webhook signature.
-2. Identify the connected Stripe account from the signed event envelope (`account`, or top-level `context` in newer API versions) and resolve it to exactly one VOIC merchant. Never use metadata or other payload values to select the merchant; an event with a missing account/context is rejected.
+2. Identify the connected Stripe account from the signed event envelope (`account`, or top-level `context` in newer API versions) and resolve it to exactly one VOIC merchant. Never use metadata or other payload values to select the merchant. Account-less local delivery uses the fallback described below and is rejected when ambiguous.
 3. Find the corresponding VOIC payment (metadata `voic_payment_id` correlation, scoped to the resolved merchant).
 4. Update its status.
 5. Store the Stripe event ID to prevent duplicate processing.
+
+The webhook stores every received event for a known connected account, not only
+payments created by Voic. For payment-related events it also normalizes the
+Stripe customer email, phone number, customer ID, and outcome (`COMPLETED` or
+`FAILED`) when those values are present on the event or its metadata. Local
+account-level forwarding may omit the signed account envelope; in that case the
+backend uses Stripe object references, `STRIPE_WEBHOOK_ACCOUNT_ID`, or a single
+connected account. A production multi-merchant deployment must use a Connect
+webhook so Stripe supplies `account`/`context`.
+
+For failed PaymentIntents, Stripe may send only a PaymentMethod ID instead of
+its billing details. When email or phone is missing from the event, the backend
+retrieves the PaymentMethod, then the Customer when available, using the
+platform secret with the connected-account scope.
 
 Deauthorization (`account.application.deauthorized`) and merchant-initiated disconnect delete the merchant's VOIC-owned Stripe data (connections, payments, events) after explicit merchant confirmation; the merchant stays signed in.
 

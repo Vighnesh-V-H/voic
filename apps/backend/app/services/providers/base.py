@@ -15,6 +15,10 @@ class PaymentProvider(Protocol):
 
     def get_price(self, account_id: str, price_id: str) -> Mapping[str, object]: ...
 
+    def get_payment_method(self, account_id: str, payment_method_id: str) -> Mapping[str, object]: ...
+
+    def get_customer(self, account_id: str, customer_id: str) -> Mapping[str, object]: ...
+
     def create_payment_intent(
         self,
         account_id: str,

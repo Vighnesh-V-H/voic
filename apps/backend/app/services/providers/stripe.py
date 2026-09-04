@@ -128,7 +128,7 @@ class StripeProvider:
 
     def list_prices(self, account_id: str):
         """
-        List all active one-time prices from a connected Stripe account.
+        List all active one-time and recurring prices from a connected Stripe account.
 
         Args:
             account_id: The Stripe account ID to query.
@@ -138,7 +138,7 @@ class StripeProvider:
         """
         import stripe
 
-        prices = stripe.Price.list(**self._account_options(account_id), active=True, type="one_time", limit=100)
+        prices = stripe.Price.list(**self._account_options(account_id), active=True, limit=100)
         return [self._normalize(price) for price in prices.data]
 
     def get_price(self, account_id: str, price_id: str):
@@ -155,6 +155,18 @@ class StripeProvider:
         import stripe
 
         return self._normalize(stripe.Price.retrieve(price_id, **self._account_options(account_id), expand=["product"]))
+
+    def get_payment_method(self, account_id: str, payment_method_id: str):
+        """Retrieve a PaymentMethod from a connected account."""
+        import stripe
+
+        return self._normalize(stripe.PaymentMethod.retrieve(payment_method_id, **self._account_options(account_id)))
+
+    def get_customer(self, account_id: str, customer_id: str):
+        """Retrieve a Customer from a connected account."""
+        import stripe
+
+        return self._normalize(stripe.Customer.retrieve(customer_id, **self._account_options(account_id)))
 
     def create_payment_intent(self, account_id: str, amount: int, currency: str, metadata, idempotency_key: str):
         """
@@ -181,9 +193,24 @@ class StripeProvider:
             idempotency_key=idempotency_key,
         ))
 
-    def create_payment_link(self, account_id: str, price_id: str, quantity: int, metadata, idempotency_key: str):
+    def create_payment_link(
+        self,
+        account_id: str,
+        price_id: str,
+        quantity: int,
+        metadata,
+        idempotency_key: str,
+        price_type: str | None = None,
+    ):
         """
         Create a Payment Link on a connected Stripe account.
+
+        Supports one-time and recurring prices. Stripe infers the checkout
+        mode from the price type and rejects the metadata container of the
+        other mode, so only the applicable container is sent: the Voic
+        payment ID goes to the PaymentIntent metadata (one-time mode) or to
+        the subscription metadata (subscription mode). Link-level metadata
+        is always sent; Stripe copies it to resulting Checkout Sessions.
 
         Args:
             account_id: The Stripe account ID to create the Payment Link on.
@@ -191,18 +218,29 @@ class StripeProvider:
             quantity: The quantity of the price.
             metadata: Metadata to attach to the Payment Link and underlying PaymentIntent.
             idempotency_key: Idempotency key for safe retries.
+            price_type: The Stripe price type ("one_time" or "recurring").
+                Determines which mode-specific metadata container is sent.
 
         Returns:
             A normalized Payment Link object with id and url.
         """
         import stripe
 
+        extra: dict[str, object] = {}
+        if price_type == "recurring":
+            extra["subscription_data"] = {"metadata": dict(metadata)}
+        else:
+            extra["payment_intent_data"] = {"metadata": dict(metadata)}
         return self._normalize(stripe.PaymentLink.create(
             **self._account_options(account_id),
             line_items=[{"price": price_id, "quantity": quantity}],
             metadata=dict(metadata),
-            payment_intent_data={"metadata": dict(metadata)},
+            phone_number_collection={
+                            "enabled": True
+                        },
+
             idempotency_key=idempotency_key,
+            **extra,
         ))
 
     def _account_options(self, account_id: str) -> dict[str, str]:

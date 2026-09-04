@@ -83,20 +83,21 @@ export default async function StripeProductPage({
             <CardTitle>Prices</CardTitle>
             <CardDescription>
               {productPrices.length === 0
-                ? "No active one-time prices for this product."
+                ? "No active prices for this product."
                 : `${productPrices.length} ${productPrices.length === 1 ? "price" : "prices"} available for checkout.`}
             </CardDescription>
           </CardHeader>
           <CardContent>
             {productPrices.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Add a one-time price in Stripe to enable Payment Links.
+                Add a price in Stripe to enable Payment Links.
               </p>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Amount</TableHead>
+                    <TableHead>Type</TableHead>
                     <TableHead>Price ID</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -105,6 +106,9 @@ export default async function StripeProductPage({
                     <TableRow key={price.id}>
                       <TableCell className="font-mono font-semibold tabular-nums">
                         {formatMoney(price.unit_amount, price.currency)}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {price.type === "recurring" ? "Recurring" : price.type === "one_time" ? "One-time" : (price.type ?? "—")}
                       </TableCell>
                       <TableCell className="font-mono text-xs break-all text-muted-foreground">
                         {price.id}

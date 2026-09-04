@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatMoney, shortId, stripeProductUrl } from "@/lib/format";
+import { formatDateTime, formatMoney, paymentStatusVariant, shortId, stripeProductUrl } from "@/lib/format";
 import { loadStripeCatalog } from "@/lib/server-api";
 
 /**
@@ -38,6 +38,7 @@ export default async function StripeManagePage() {
   }
 
   const priceToProduct = new Map(prices.map((price) => [price.id, price.product_id ?? null]));
+  const productById = new Map(products.map((product) => [product.id, product]));
   const paymentsByProduct = new Map<string, number>();
   for (const payment of payments) {
     const productId = priceToProduct.get(payment.provider_price_id);
@@ -70,7 +71,7 @@ export default async function StripeManagePage() {
             </EmptyMedia>
             <EmptyTitle>No products found</EmptyTitle>
             <EmptyDescription>
-              Add a product with an active one-time price in Stripe, then reload this page.
+              Add a product with an active price in Stripe, then reload this page.
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -167,24 +168,63 @@ export default async function StripeManagePage() {
         <Card className="mt-4">
           <CardHeader>
             <CardTitle>Recent events</CardTitle>
-            <CardDescription>Verified Stripe webhooks, newest first</CardDescription>
+            <CardDescription>Checkout completions and payment failures, newest first</CardDescription>
           </CardHeader>
           <CardContent>
             {events.length === 0 ? (
               <p className="text-sm text-muted-foreground">No webhook events received yet.</p>
             ) : (
               <ul className="flex flex-col divide-y divide-border">
-                {events.slice(0, 5).map((event) => (
+                {events.slice(0, 5).map((event) => {
+                  const productId = event.provider_price_id
+                    ? (priceToProduct.get(event.provider_price_id) ?? null)
+                    : null;
+                  const product = productId ? productById.get(productId) : undefined;
+                  return (
                   <li
                     key={event.id}
                     className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
                   >
-                    <span className="truncate font-medium">{event.event_type}</span>
-                    <span className="truncate font-mono text-xs text-muted-foreground" title={event.provider_payment_id ?? event.id}>
-                      {event.provider_payment_id ? shortId(event.provider_payment_id) : "Account event"}
-                    </span>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="truncate font-medium">{event.event_type}</span>
+                        {event.payment_status ? (
+                          <Badge variant={paymentStatusVariant(event.payment_status)}>{event.payment_status}</Badge>
+                        ) : null}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+                        {product ? (
+                          <Link
+                            href={`/settings/integrations/stripe/products/${product.id}`}
+                            className="font-medium text-primary underline-offset-4 hover:underline"
+                          >
+                            {product.name}
+                          </Link>
+                        ) : (
+                          <span>No linked product</span>
+                        )}
+                        {event.provider_price_id ? (
+                          <span className="font-mono" title={event.provider_price_id}>
+                            {event.provider_price_id}
+                          </span>
+                        ) : null}
+                      </div>
+                      {event.customer_email || event.customer_phone ? (
+                        <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+                          {event.customer_email ? <span>{event.customer_email}</span> : null}
+                          {event.customer_phone ? <span>{event.customer_phone}</span> : null}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
+                      <span className="truncate font-mono" title={event.provider_payment_id ?? event.id}>
+                        {event.provider_payment_id ? shortId(event.provider_payment_id) : "Account event"}
+                      </span>
+                      <span>{formatDateTime(event.occurred_at)}</span>
+                    </div>
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             )}
           </CardContent>
