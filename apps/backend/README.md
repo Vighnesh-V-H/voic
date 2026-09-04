@@ -42,3 +42,24 @@ If local account-level forwarding omits `account`/`context`, set
 `STRIPE_WEBHOOK_ACCOUNT_ID` to the connected `acct_...` ID, or rely on the
 single-account development fallback. The fallback is rejected when multiple
 connected accounts could match; metadata is never used to choose a merchant.
+
+## Voice recovery calls (Vobiz)
+
+Failed payments trigger one outbound recovery call through Vobiz. Setup path:
+
+```text
+1. Sign up at https://console.vobiz.ai and copy the Auth ID + Auth Token
+2. Buy a voice-enabled DID number (the caller ID shown to customers)
+3. Expose this backend on a public HTTPS URL (ngrok in local dev)
+4. Copy `.env.example` to `.env` and fill the VOBIZ_* / VOICE_* values
+```
+
+Relevant settings (`VOBIZ_AUTH_ID`, `VOBIZ_AUTH_TOKEN`, `VOBIZ_CALLER_ID`,
+`VOBIZ_ANSWER_URL`, `VOBIZ_PUBLIC_BASE_URL`, `VOICE_CALLBACK_TOKEN`) are all
+documented in `.env.example` and left empty by default. Empty means calling
+is disabled: webhooks keep working and the trigger logs and skips.
+
+Callback authentication: Vobiz posts cannot carry custom headers, so every
+per-call answer/hangup URL embeds `VOICE_CALLBACK_TOKEN` (a long random
+string generated once per deployment). The voice endpoints accept only
+requests carrying it.

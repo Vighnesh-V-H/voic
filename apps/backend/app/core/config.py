@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     vobiz_auth_token: str = ""
     vobiz_caller_id: str = ""
     vobiz_answer_url: str = ""
+    vobiz_public_base_url: str = ""
+    voice_callback_token: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -32,12 +32,19 @@ class VobizCallError(Exception):
 
 
 def is_configured(settings: Settings) -> bool:
-    """Return True only when every Vobiz setting needed to dial is present."""
+    """Return True only when every voice setting needed to dial is present.
+
+    Dialing requires the Vobiz credentials, the caller ID, and the callback
+    plumbing (public base URL plus callback token) so a placed call always
+    has working per-call answer/hangup URLs.
+    """
     return bool(
         settings.vobiz_auth_id.strip()
         and settings.vobiz_auth_token.strip()
         and settings.vobiz_caller_id.strip()
         and settings.vobiz_answer_url.strip()
+        and settings.vobiz_public_base_url.strip()
+        and settings.voice_callback_token.strip()
     )
 
 

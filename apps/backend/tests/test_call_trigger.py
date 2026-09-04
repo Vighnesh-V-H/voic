@@ -22,6 +22,8 @@ VOBIZ_SETTINGS = {
     "vobiz_auth_token": "auth_test_token",
     "vobiz_caller_id": "+911234567890",
     "vobiz_answer_url": "https://voic.example.com/voice/answer",
+    "vobiz_public_base_url": "https://voic.example.com",
+    "voice_callback_token": "token_test_123",
 }
 CUSTOMER_PHONE = "+919876543210"
 
