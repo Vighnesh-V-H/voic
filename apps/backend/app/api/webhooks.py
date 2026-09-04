@@ -5,13 +5,14 @@ from logging import getLogger
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.api.auth import current_user
+from app.models.call_attempt import CallAttempt
 from app.models.payment import Payment
 from app.models.payment_event import PaymentEvent
 from app.models.provider_connection import ProviderConnection
@@ -61,6 +62,12 @@ def delete_merchant_stripe_data(db: Session, merchant_id: str) -> None:
         delete(PaymentEvent).where(
             PaymentEvent.merchant_id == merchant_id,
             PaymentEvent.provider == "stripe",
+        )
+    )
+    db.execute(
+        delete(CallAttempt).where(
+            CallAttempt.merchant_id == merchant_id,
+            CallAttempt.provider == "vobiz",
         )
     )
     db.execute(
@@ -445,6 +452,19 @@ def payment_for_provider_ref(
     return None
 
 
+def close_queued_call_attempts(db: Session, merchant_id: str, payment_id: str, now: datetime) -> None:
+    """Stop recovery jobs that have not dialed yet after a payment succeeds."""
+    db.execute(
+        update(CallAttempt)
+        .where(
+            CallAttempt.merchant_id == merchant_id,
+            CallAttempt.payment_id == payment_id,
+            CallAttempt.status == "QUEUED",
+        )
+        .values(status="CANCELLED", closed_at=now, updated_at=now)
+    )
+
+
 @router.post("/stripe")
 async def stripe_webhook(
     request: Request,
@@ -637,6 +657,25 @@ async def stripe_webhook(
                 customer_phone = customer_phone or customer_phone_from_stripe
             except Exception:
                 logger.warning("Could not retrieve Customer for Stripe webhook event=%s", event_id)
+        if (
+            (customer_email is None or customer_phone is None)
+            and provider_payment_id is not None
+        ):
+            # Checkout collects the customer phone on the Checkout Session
+            # (customer_details), not on the PaymentIntent or its payment
+            # method, so failure events need the session lookup fallback.
+            try:
+                checkout_session = provider.get_checkout_session_for_payment_intent(
+                    connection.provider_account_id, provider_payment_id
+                )
+                if checkout_session is not None:
+                    _, session_email, session_phone = customer_data(checkout_session, {})
+                    customer_email = customer_email or session_email
+                    customer_phone = customer_phone or session_phone
+            except Exception:
+                logger.warning(
+                    "Could not retrieve Checkout Session for Stripe webhook event=%s", event_id
+                )
     now = datetime.now(UTC)
     occurred_at = event_time(event.get("created"))
     payment_event = PaymentEvent(
@@ -661,6 +700,7 @@ async def stripe_webhook(
 
     payment: Payment | None = None
     failed_transition = False
+    completed_transition = False
     if event_type == "payment_intent.payment_failed":
         payment = payment_for_event(
             db, connection.merchant_id, connection, provider_payment_id, metadata, payment_link_id
@@ -713,6 +753,9 @@ async def stripe_webhook(
             ):
                 payment.status = next_status
                 payment.last_event_at = occurred_at
+                completed_transition = next_status == "COMPLETED"
+    if completed_transition and payment is not None:
+        close_queued_call_attempts(db, connection.merchant_id, payment.id, now)
     if payment is not None and payment.provider_price_id:
         # Attribute the event to the Voic price so the UI can map it to a product.
         payment_event.provider_price_id = payment.provider_price_id
@@ -721,10 +764,15 @@ async def stripe_webhook(
     except IntegrityError:
         db.rollback()
         return {"status": "duplicate"}
-    if failed_transition and payment is not None:
-        # Call trigger: this event flipped the payment to FAILED, so enqueue
-        # one Vobiz recovery call. Runs after the response; the trigger
-        # itself decides (phone present, Vobiz configured) and never raises.
+    if (
+        failed_transition
+        or (completed_transition and settings.voice_demo_success_trigger)
+    ) and payment is not None:
+        # Call trigger: this event flipped the payment (to FAILED, or — demo
+        # flag only — to COMPLETED, where the checkout phone is reliable), so
+        # enqueue one Vobiz recovery call. Runs after the response; the
+        # trigger itself decides (phone present, Vobiz configured) and never
+        # raises.
         background.add_task(
             vobiz_calls.trigger_recovery_call,
             settings,
@@ -732,6 +780,7 @@ async def stripe_webhook(
             merchant_id=connection.merchant_id,
             payment_id=payment.id,
             customer_phone=customer_phone,
+            db=db,
         )
     return {"status": "processed"}
 

@@ -2,10 +2,15 @@ import json
 import time
 
 import pytest
+from sqlalchemy import select
 
 from app.api.stripe import get_payment_provider
+from app.api import webhooks
 from app.core.config import Settings, get_settings
+from app.core.database import get_db
 from app.main import app
+from app.models.call_attempt import CallAttempt
+from app.models.payment import Payment
 from app.services.calls import vobiz
 from app.services.calls.vobiz import VobizCallError, trigger_recovery_call
 from tests.test_stripe import (
@@ -22,6 +27,8 @@ VOBIZ_SETTINGS = {
     "vobiz_auth_token": "auth_test_token",
     "vobiz_caller_id": "+911234567890",
     "vobiz_answer_url": "https://voic.example.com/voice/answer",
+    "vobiz_public_base_url": "https://voic.example.com",
+    "voice_callback_token": "token_test_123",
 }
 CUSTOMER_PHONE = "+919876543210"
 
@@ -33,6 +40,15 @@ def vobiz_secret():
     )
     yield
     app.dependency_overrides.pop(get_settings, None)
+
+
+@pytest.fixture()
+def db_session(client):
+    override = app.dependency_overrides[get_db]
+    session_generator = override()
+    db = next(session_generator)
+    yield db
+    session_generator.close()
 
 
 @pytest.fixture()
@@ -56,22 +72,24 @@ def fake_provider():
 def recorded_calls(monkeypatch):
     calls: list[dict] = []
 
-    def fake_place_call(settings, *, to: str) -> str:
-        calls.append({"to": to})
+    def fake_place_call(settings, *, to: str, payment_id: str, attempt_id: str) -> str:
+        calls.append({"to": to, "payment_id": payment_id})
         return "call_test_123"
 
     monkeypatch.setattr(vobiz, "place_call", fake_place_call)
     return calls
 
 
-def failed_payload_with_phone(payment_id: str, event_id: str = "evt_failed_call") -> str:
+def failed_payload_with_phone(
+    payment_id: str, event_id: str = "evt_failed_call", created: int | None = None
+) -> str:
     """Build a payment_intent.payment_failed payload carrying a customer phone."""
     return json.dumps(
         {
             "id": event_id,
             "object": "event",
             "account": "acct_test_123",
-            "created": int(time.time()),
+            "created": created if created is not None else int(time.time()),
             "type": "payment_intent.payment_failed",
             "data": {
                 "object": {
@@ -87,8 +105,10 @@ def failed_payload_with_phone(payment_id: str, event_id: str = "evt_failed_call"
     )
 
 
-def post_failed_with_phone(client, payment_id: str, event_id: str = "evt_failed_call"):
-    payload = failed_payload_with_phone(payment_id, event_id)
+def post_failed_with_phone(
+    client, payment_id: str, event_id: str = "evt_failed_call", created: int | None = None
+):
+    payload = failed_payload_with_phone(payment_id, event_id, created)
     return client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
 
 
@@ -99,7 +119,7 @@ def test_failed_payment_with_phone_triggers_vobiz_call(client, fake_provider, vo
 
     assert response.status_code == 200
     assert response.json() == {"status": "processed"}
-    assert recorded_calls == [{"to": CUSTOMER_PHONE}]
+    assert recorded_calls == [{"to": CUSTOMER_PHONE, "payment_id": payment_id}]
     assert client.get(f"/api/v1/payments/{payment_id}").json()["status"] == "FAILED"
 
 
@@ -111,6 +131,38 @@ def test_failed_payment_without_phone_skips_call(client, fake_provider, vobiz_se
 
     assert response.status_code == 200
     assert recorded_calls == []
+
+
+def test_failed_payment_dials_phone_from_checkout_session_fallback(
+    client, fake_provider, recorded_calls, monkeypatch
+):
+    payment_id = connected_payment(client, fake_provider)
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        stripe_connect_webhook_secret=WEBHOOK_SECRET,
+        stripe_platform_secret_key="sk_test_enrich",
+        **VOBIZ_SETTINGS,
+    )
+    try:
+
+        def fake_session_lookup(self, account_id: str, payment_intent_id: str):
+            return {"customer_details": {"phone": CUSTOMER_PHONE}}
+
+        monkeypatch.setattr(
+            webhooks.StripeProvider,
+            "get_checkout_session_for_payment_intent",
+            fake_session_lookup,
+        )
+        payload = webhook_payload(payment_id)
+
+        response = client.post(
+            "/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload)
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "processed"}
+        assert recorded_calls == [{"to": CUSTOMER_PHONE, "payment_id": payment_id}]
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
 
 
 def test_failed_payment_without_vobiz_config_skips_call(
@@ -146,11 +198,153 @@ def test_duplicate_failed_event_calls_only_once(client, fake_provider, vobiz_sec
 
     assert first.json() == {"status": "processed"}
     assert second.json() == {"status": "duplicate"}
-    assert recorded_calls == [{"to": CUSTOMER_PHONE}]
+    assert recorded_calls == [{"to": CUSTOMER_PHONE, "payment_id": payment_id}]
+
+
+def test_distinct_failed_events_persist_one_attempt_and_call_once(
+    client, fake_provider, vobiz_secret, recorded_calls, db_session
+):
+    payment_id = connected_payment(client, fake_provider)
+    timestamp = int(time.time())
+
+    first = post_failed_with_phone(client, payment_id, event_id="evt_failed_first", created=timestamp)
+    second = post_failed_with_phone(client, payment_id, event_id="evt_failed_retry", created=timestamp + 1)
+
+    assert first.json() == {"status": "processed"}
+    assert second.json() == {"status": "processed"}
+    assert recorded_calls == [{"to": CUSTOMER_PHONE, "payment_id": payment_id}]
+    attempts = db_session.query(CallAttempt).filter(CallAttempt.payment_id == payment_id).all()
+    assert len(attempts) == 1
+    assert attempts[0].provider == "vobiz"
+    assert attempts[0].provider_call_id == "call_test_123"
+    assert attempts[0].status == "PLACED"
+    assert attempts[0].created_at is not None
+    assert attempts[0].placed_at is not None
+
+
+def completed_payload_with_phone(
+    payment_id: str, event_id: str = "evt_demo_success"
+) -> str:
+    """Build a checkout.session.completed payload carrying the checkout phone."""
+    return json.dumps(
+        {
+            "id": event_id,
+            "object": "event",
+            "account": "acct_test_123",
+            "created": int(time.time()),
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "id": "cs_test_session_valid",
+                    "object": "checkout.session",
+                    "payment_intent": "pi_test_123",
+                    "amount_total": 2500,
+                    "currency": "usd",
+                    "payment_status": "paid",
+                    "status": "complete",
+                    "customer_details": {"phone": CUSTOMER_PHONE},
+                    "metadata": {"voic_payment_id": payment_id},
+                }
+            },
+        },
+        separators=(",", ":"),
+    )
+
+
+def test_demo_flag_dials_on_completed_payment(client, fake_provider, recorded_calls, db_session):
+    payment_id = connected_payment(client, fake_provider)
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        stripe_connect_webhook_secret=WEBHOOK_SECRET,
+        voice_demo_success_trigger=True,
+        **VOBIZ_SETTINGS,
+    )
+    try:
+        payload = completed_payload_with_phone(payment_id, event_id="evt_demo_success")
+
+        response = client.post(
+            "/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload)
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "processed"}
+        assert recorded_calls == [{"to": CUSTOMER_PHONE, "payment_id": payment_id}]
+        attempt = (
+            db_session.query(CallAttempt).filter(CallAttempt.payment_id == payment_id).one()
+        )
+        assert attempt.status == "PLACED"
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+def test_completed_payment_closes_queued_attempt_and_blocks_dial(
+    client, fake_provider, vobiz_secret, recorded_calls, db_session
+):
+    payment_id = connected_payment(client, fake_provider)
+    payment = db_session.get(Payment, payment_id)
+    payment.status = "FAILED"
+    attempt = CallAttempt(
+        merchant_id=payment.merchant_id,
+        payment_id=payment.id,
+        provider="vobiz",
+        status="QUEUED",
+    )
+    db_session.add(attempt)
+    db_session.commit()
+
+    payload = checkout_completed_payload(payment_id, event_id="evt_recovered_payment")
+    response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
+
+    assert response.json() == {"status": "processed"}
+    db_session.refresh(attempt)
+    assert attempt.status == "CANCELLED"
+    assert attempt.closed_at is not None
+    assert recorded_calls == []
+
+
+def test_out_of_order_failure_after_success_does_not_dial(
+    client, fake_provider, vobiz_secret, recorded_calls, db_session
+):
+    payment_id = connected_payment(client, fake_provider)
+    success_time = int(time.time()) + 10
+    success = checkout_completed_payload(payment_id, event_id="evt_success_first", created=success_time)
+    failure = failed_payload_with_phone(payment_id, event_id="evt_failure_late_delivery", created=success_time - 1)
+
+    assert client.post("/api/v1/webhooks/stripe", content=success, headers=signed_headers(success)).json() == {
+        "status": "processed"
+    }
+    assert client.post("/api/v1/webhooks/stripe", content=failure, headers=signed_headers(failure)).json() == {
+        "status": "processed"
+    }
+    assert client.get(f"/api/v1/payments/{payment_id}").json()["status"] == "COMPLETED"
+    assert db_session.query(CallAttempt).filter(CallAttempt.payment_id == payment_id).count() == 0
+
+
+def test_attempt_requires_the_payment_merchant_boundary(
+    client, fake_provider, vobiz_secret, recorded_calls, db_session
+):
+    payment_id = connected_payment(client, fake_provider)
+    payment = db_session.get(Payment, payment_id)
+    payment.status = "FAILED"
+    db_session.commit()
+
+    result = trigger_recovery_call(
+        Settings(**VOBIZ_SETTINGS),
+        event_type="payment_intent.payment_failed",
+        merchant_id="another-merchant",
+        payment_id=payment_id,
+        customer_phone=CUSTOMER_PHONE,
+        db=db_session,
+    )
+
+    assert result == "skipped:payment-not-found"
+    assert recorded_calls == []
+    assert db_session.query(CallAttempt).filter(CallAttempt.payment_id == payment_id).count() == 0
 
 
 def test_trigger_rejects_non_trigger_event():
-    settings = Settings(**VOBIZ_SETTINGS)
+    # _env_file=None: ignore apps/backend/.env so this stays hermetic even
+    # when the local .env enables the demo success trigger.
+    settings = Settings(_env_file=None, **VOBIZ_SETTINGS)
 
     assert (
         trigger_recovery_call(
@@ -167,7 +361,9 @@ def test_trigger_rejects_non_trigger_event():
 def test_trigger_skips_when_vobiz_unconfigured():
     assert (
         trigger_recovery_call(
-            Settings(),
+            # _env_file=None: ignore apps/backend/.env so this stays hermetic
+            # even when the local .env carries real Vobiz credentials.
+            Settings(_env_file=None),
             event_type="payment_intent.payment_failed",
             merchant_id="m_1",
             payment_id="pay_1",
@@ -177,19 +373,31 @@ def test_trigger_skips_when_vobiz_unconfigured():
     )
 
 
-def test_trigger_surfaces_provider_error_as_skip(monkeypatch):
-    def boom(settings, *, to: str) -> str:
+def test_trigger_surfaces_provider_error_as_skip(client, fake_provider, vobiz_secret, monkeypatch):
+    def boom(settings, *, to: str, payment_id: str, attempt_id: str) -> str:
         raise VobizCallError("down")
 
     monkeypatch.setattr(vobiz, "place_call", boom)
+    payment_id = connected_payment(client, fake_provider)
+    override = app.dependency_overrides[get_db]
+    session_generator = override()
+    db = next(session_generator)
 
-    assert (
-        trigger_recovery_call(
-            Settings(**VOBIZ_SETTINGS),
-            event_type="payment_intent.payment_failed",
-            merchant_id="m_1",
-            payment_id="pay_1",
-            customer_phone=CUSTOMER_PHONE,
+    try:
+        payment = db.scalar(select(Payment).where(Payment.id == payment_id))
+        merchant_id = payment.merchant_id
+        payment.status = "FAILED"
+        db.commit()
+        assert (
+            trigger_recovery_call(
+                Settings(**VOBIZ_SETTINGS),
+                event_type="payment_intent.payment_failed",
+                merchant_id=merchant_id,
+                payment_id=payment_id,
+                customer_phone=CUSTOMER_PHONE,
+                db=db,
+            )
+            == "skipped:vobiz-error"
         )
-        == "skipped:vobiz-error"
-    )
+    finally:
+        session_generator.close()
