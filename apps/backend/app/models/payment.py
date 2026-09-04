@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 if TYPE_CHECKING:
+    from app.models.call_attempt import CallAttempt
     from app.models.merchant import Merchant
     from app.models.provider_connection import ProviderConnection
 
@@ -47,3 +48,6 @@ class Payment(Base):
 
     merchant: Mapped["Merchant"] = relationship()
     provider_connection: Mapped["ProviderConnection"] = relationship()
+    call_attempts: Mapped[list["CallAttempt"]] = relationship(
+        back_populates="payment", cascade="all, delete-orphan"
+    )

@@ -9,14 +9,15 @@ flips status to `FAILED`, commits, then enqueues
 `app/services/calls/vobiz.py:trigger_recovery_call` via FastAPI
 `BackgroundTasks`. The trigger calls Vobiz `POST /Account/{auth_id}/Call/`
 with `from` = `VOBIZ_CALLER_ID`, `to` = customer phone, `answer_url` =
-`VOBIZ_ANSWER_URL`. Without credentials it logs `skipped:vobiz-not-configured`
-and the webhook still returns 2xx. Covered by
-`apps/backend/tests/test_call_trigger.py` (8 tests).
+`VOBIZ_ANSWER_URL`. Before dialing, it persists a `CallAttempt` claim unique
+to the merchant and payment, then records the provider ID and placement
+status. Without credentials it logs `skipped:vobiz-not-configured` and the
+webhook still returns 2xx. Covered by `apps/backend/tests/test_call_trigger.py`.
 
 ## Rule
 
 ```text
-FAILED transition + customer phone present + no open call for this payment = CALL
+FAILED transition + customer phone present + no existing call attempt for this payment = CALL
 Everything else = DO NOT CALL
 ```
 
@@ -43,6 +44,6 @@ Everything else = DO NOT CALL
 4. Async only — webhook returns 2xx fast; call job runs in a worker with its own retry, not webhook retry.
 5. Merchant scope — job carries `merchant_id` from the resolved `ProviderConnection`; never resolve merchant from metadata/phone.
 
-## Gap to close before building
+## Next trigger extension
 
 Code today only stores `checkout.session.completed` + `payment_intent.payment_failed` (`STORED_EVENT_TYPES`, `webhooks.py:41`). The other rows above match `docs/architecture.md` intent but are ignored at `webhooks.py:583`. Extend the allowlist + `FAILED`/`COMPLETED` transitions first, then attach the call enqueue behind the same transition so every call source stays `Payment.status = FAILED`.

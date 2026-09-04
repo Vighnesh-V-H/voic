@@ -15,6 +15,7 @@ from app.api.auth import current_user
 from app.api.webhooks import delete_merchant_stripe_data
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
+from app.models.call_attempt import CallAttempt
 from app.models.oauth_state import OAuthState
 from app.models.payment import Payment
 from app.models.payment_event import PaymentEvent
@@ -260,6 +261,12 @@ def callback(
         db.execute(
             delete(PaymentEvent).where(
                 PaymentEvent.provider_connection_id == old_connection.id,
+            )
+        )
+        db.execute(
+            delete(CallAttempt).where(
+                CallAttempt.provider == "vobiz",
+                CallAttempt.merchant_id == user.merchant_id,
             )
         )
         db.execute(

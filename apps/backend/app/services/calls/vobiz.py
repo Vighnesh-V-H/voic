@@ -16,9 +16,17 @@ working in local development. This module never raises to the webhook.
 
 import json
 import urllib.request
+from datetime import UTC, datetime
 from logging import getLogger
 
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
 from app.core.config import Settings
+from app.core.database import SessionLocal
+from app.models.call_attempt import CallAttempt
+from app.models.payment import Payment
 
 logger = getLogger(__name__)
 
@@ -97,8 +105,9 @@ def trigger_recovery_call(
     merchant_id: str,
     payment_id: str,
     customer_phone: str | None,
+    db: Session | None = None,
 ) -> str:
-    """Decide and place one recovery call; never raises.
+    """Reserve, place, and persist one recovery call; never raises.
 
     Args:
         settings: Application settings carrying the Vobiz configuration.
@@ -106,6 +115,8 @@ def trigger_recovery_call(
         merchant_id: Merchant that owns the payment (for log scoping).
         payment_id: Voic payment ID the call is about.
         customer_phone: Normalized customer phone, if the event carried one.
+        db: Optional database session. Webhook tasks pass their request session;
+            direct workers create and close their own session.
 
     Returns:
         ``"called:<provider_id>"`` on success, otherwise a
@@ -119,15 +130,74 @@ def trigger_recovery_call(
     if not is_configured(settings):
         logger.info("Skipping recovery call for payment %s: Vobiz not configured", payment_id)
         return "skipped:vobiz-not-configured"
+
+    own_session = db is None
+    session = db or SessionLocal()
     try:
-        call_id = place_call(settings, to=customer_phone)
-    except VobizCallError:
-        logger.exception("Recovery call failed for payment %s", payment_id)
-        return "skipped:vobiz-error"
-    logger.info(
-        "Triggered Vobiz recovery call for merchant %s payment %s (provider_id=%s)",
-        merchant_id,
-        payment_id,
-        call_id,
-    )
-    return f"called:{call_id}"
+        existing = session.scalar(
+            select(CallAttempt).where(
+                CallAttempt.merchant_id == merchant_id,
+                CallAttempt.payment_id == payment_id,
+            )
+        )
+        if existing is not None:
+            return "skipped:already-attempted"
+
+        payment = session.scalar(
+            select(Payment).where(
+                Payment.id == payment_id,
+                Payment.merchant_id == merchant_id,
+            )
+        )
+        if payment is None:
+            logger.info("Skipping recovery call for unknown payment %s", payment_id)
+            return "skipped:payment-not-found"
+        if payment.status == "COMPLETED":
+            logger.info("Skipping recovery call for completed payment %s", payment_id)
+            return "skipped:payment-completed"
+        if payment.status != "FAILED":
+            logger.info("Skipping recovery call for payment %s with status %s", payment_id, payment.status)
+            return "skipped:payment-not-failed"
+
+        attempt = CallAttempt(
+            merchant_id=merchant_id,
+            payment_id=payment_id,
+            provider="vobiz",
+            status="QUEUED",
+        )
+        session.add(attempt)
+        try:
+            # Commit the claim before the provider request. The unique key makes
+            # separate webhook workers converge on one outbound call.
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            return "skipped:already-attempted"
+
+        try:
+            call_id = place_call(settings, to=customer_phone)
+        except VobizCallError:
+            logger.exception("Recovery call failed for payment %s", payment_id)
+            attempt.status = "FAILED"
+            attempt.closed_at = datetime.now(UTC)
+            session.commit()
+            return "skipped:vobiz-error"
+
+        attempt.provider_call_id = call_id or None
+        attempt.status = "PLACED"
+        attempt.placed_at = datetime.now(UTC)
+        session.commit()
+        logger.info(
+            "Triggered Vobiz recovery call for merchant %s payment %s (provider_id=%s)",
+            merchant_id,
+            payment_id,
+            call_id,
+        )
+        return f"called:{call_id}"
+    except Exception:
+        session.rollback()
+        logger.exception("Could not persist recovery call for payment %s", payment_id)
+        return "skipped:database-error"
+    finally:
+        if own_session:
+            session.close()
