@@ -1,11 +1,55 @@
-import { formatMoney, type DayBucket } from "@/lib/format";
+import { formatMoney, formatMoneyCompact, type DayBucket } from "@/lib/format";
 
-/**
- * Completed-volume bar chart for the last 14 days.
- *
- * Pure server-rendered bars (no client JS): height is proportional to the
- * peak day. Amounts stay in the primary currency.
- */
+const VIEW_W = 560;
+const VIEW_H = 216;
+const PAD = { top: 24, right: 12, bottom: 26, left: 46 };
+
+type Point = {
+  x: number;
+  y: number;
+};
+
+function round(value: number) {
+  return Math.round(value * 10) / 10;
+}
+
+function smoothLine(points: Point[], minY: number, maxY: number) {
+  if (points.length < 2) return "";
+
+  if (points.length === 2) {
+    return `M ${round(points[0].x)} ${round(points[0].y)} L ${round(
+      points[1].x,
+    )} ${round(points[1].y)}`;
+  }
+
+  let path = `M ${round(points[0].x)} ${round(points[0].y)}`;
+
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(points.length - 1, i + 2)];
+
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = Math.max(
+      minY,
+      Math.min(maxY, p1.y + (p2.y - p0.y) / 6),
+    );
+
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = Math.max(
+      minY,
+      Math.min(maxY, p2.y - (p3.y - p1.y) / 6),
+    );
+
+    path += ` C ${round(c1x)} ${round(c1y)}, ${round(c2x)} ${round(
+      c2y,
+    )}, ${round(p2.x)} ${round(p2.y)}`;
+  }
+
+  return path;
+}
+
 export function RevenueChart({
   buckets,
   currency,
@@ -16,46 +60,201 @@ export function RevenueChart({
   const peak = Math.max(0, ...buckets.map((bucket) => bucket.value));
   const hasVolume = peak > 0;
 
+  const plotW = VIEW_W - PAD.left - PAD.right;
+  const plotH = VIEW_H - PAD.top - PAD.bottom;
+  const baseY = PAD.top + plotH;
+
+  if (buckets.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Enter a valid date range to see the trend.
+      </p>
+    );
+  }
+
+  const step =
+    buckets.length === 1 ? 0 : plotW / (buckets.length - 1);
+
+  const points: Point[] = buckets.map((bucket, index) => ({
+    x:
+      PAD.left +
+      (buckets.length === 1 ? plotW / 2 : index * step),
+    y: hasVolume
+      ? PAD.top + plotH * (1 - bucket.value / peak)
+      : baseY,
+  }));
+
+  const line = smoothLine(points, PAD.top, baseY);
+
+  const area = line
+    ? `${line} L ${round(
+        points[points.length - 1].x,
+      )} ${baseY} L ${round(points[0].x)} ${baseY} Z`
+    : "";
+
+  const peakIndex = buckets.findIndex(
+    (bucket) => bucket.value === peak,
+  );
+
+  const tickIndexes = [
+    ...new Set([
+      0,
+      Math.floor((buckets.length - 1) / 3),
+      Math.floor((2 * (buckets.length - 1)) / 3),
+      buckets.length - 1,
+    ]),
+  ];
+
+  const gridValues = [0, peak / 2, peak];
+
   return (
-    <div>
-      <div
-        className="flex h-36 items-end gap-1.5"
-        role="img"
-        aria-label={
-          hasVolume
-            ? `Completed payments by day, peak ${formatMoney(peak, currency)}`
-            : "No completed payments in the last 14 days"
-        }
+    <div
+      role="img"
+      aria-label={
+        hasVolume
+          ? `Completed payments by day, peak ${formatMoney(
+              peak,
+              currency,
+            )}`
+          : "No completed payments in the selected range"
+      }
+    >
+      <svg
+        viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
+        className="w-full"
+        role="presentation"
       >
-        {buckets.map((bucket) => {
-          const height = hasVolume ? Math.max(4, Math.round((bucket.value / peak) * 100)) : 4;
+        {gridValues.map((value, index) => {
+          const y = hasVolume
+            ? PAD.top + plotH * (1 - value / peak)
+            : baseY;
+
           return (
-            <div key={bucket.key} className="flex min-w-0 flex-1 flex-col items-center gap-2 self-stretch">
-              <div className="flex w-full flex-1 items-end">
-                <div
-                  title={`${bucket.label}: ${formatMoney(bucket.value, currency)}`}
-                  className={
-                    bucket.value > 0
-                      ? "w-full rounded-sm bg-primary"
-                      : "w-full rounded-sm bg-border"
-                  }
-                  style={{ height: `${height}%` }}
-                />
-              </div>
-              <span className="hidden truncate text-[10px] text-muted-foreground sm:block">
-                {bucket.label}
-              </span>
-            </div>
+            <g key={`grid-${index}`}>
+              <line
+                x1={PAD.left}
+                x2={VIEW_W - PAD.right}
+                y1={round(y)}
+                y2={round(y)}
+                stroke="var(--border)"
+                strokeDasharray="3 4"
+              />
+
+              <text
+                x={PAD.left - 8}
+                y={round(y) + 3.5}
+                textAnchor="end"
+                className="fill-muted-foreground font-mono text-[10px] tabular-nums"
+              >
+                {formatMoneyCompact(value, currency)}
+              </text>
+            </g>
           );
         })}
-      </div>
-      <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-        <span>{buckets[0]?.label}</span>
-        <span className="font-mono">
-          Peak {formatMoney(peak, currency)}
-        </span>
-        <span>{buckets[buckets.length - 1]?.label}</span>
-      </div>
+
+        {area ? (
+          <>
+            <path
+              d={area}
+              fill="var(--primary)"
+              fillOpacity={0.08}
+            />
+
+            <path
+              d={line}
+              fill="none"
+              stroke="var(--primary)"
+              strokeWidth={1.5}
+              vectorEffect="non-scaling-stroke"
+              strokeLinecap="round"
+            />
+          </>
+        ) : null}
+
+        <line
+          x1={PAD.left}
+          x2={VIEW_W - PAD.right}
+          y1={baseY}
+          y2={baseY}
+          stroke="var(--border)"
+        />
+
+        {tickIndexes.map((index) => (
+          <text
+            key={buckets[index].key}
+            x={round(points[index].x)}
+            y={VIEW_H - 8}
+            textAnchor="middle"
+            className="fill-muted-foreground text-[10px]"
+          >
+            {buckets[index].label}
+          </text>
+        ))}
+
+        {hasVolume && peakIndex >= 0 ? (
+          <g>
+            <circle
+              cx={round(points[peakIndex].x)}
+              cy={round(points[peakIndex].y)}
+              r={3.5}
+              fill="var(--primary)"
+            />
+
+            <text
+              x={Math.min(
+                Math.max(points[peakIndex].x, PAD.left + 30),
+                VIEW_W - PAD.right - 30,
+              )}
+              y={round(points[peakIndex].y) - 9}
+              textAnchor="middle"
+              className="fill-foreground font-mono text-[11px] font-semibold tabular-nums"
+            >
+              {formatMoney(peak, currency)}
+            </text>
+          </g>
+        ) : null}
+
+        {buckets.map((bucket, index) => {
+          const half =
+            buckets.length === 1 ? plotW / 2 : step / 2;
+
+          return (
+            <g key={bucket.key} className="group">
+              <rect
+                x={round(
+                  Math.max(
+                    PAD.left,
+                    points[index].x - half,
+                  ),
+                )}
+                y={PAD.top}
+                width={round(
+                  Math.min(
+                    points[index].x + half,
+                    VIEW_W - PAD.right,
+                  ) -
+                    Math.max(
+                      PAD.left,
+                      points[index].x - half,
+                    ),
+                )}
+                height={plotH}
+                fill="transparent"
+              />
+
+              <circle
+                cx={round(points[index].x)}
+                cy={round(points[index].y)}
+                r={4}
+                fill="var(--card)"
+                stroke="var(--primary)"
+                strokeWidth={2}
+                className="opacity-0 transition-opacity group-hover:opacity-100"
+              />
+            </g>
+          );
+        })}
+      </svg>
     </div>
   );
 }

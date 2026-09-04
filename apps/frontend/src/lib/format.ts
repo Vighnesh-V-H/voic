@@ -33,6 +33,19 @@ export function formatDateTime(value: string | null | undefined) {
   }).format(date);
 }
 
+export function formatMoneyCompact(amount: number | null | undefined, currency: string | null | undefined) {
+  if (amount === null || amount === undefined || !currency) return "—";
+  try {
+    return new Intl.NumberFormat(APP_LOCALE, {
+      style: "currency",
+      currency: currency.toUpperCase(),
+      notation: "compact",
+    }).format(amount / 100);
+  } catch {
+    return formatMoney(amount, currency);
+  }
+}
+
 export function paymentStatusVariant(status: string) {
   switch (status) {
     case "COMPLETED":

@@ -3,10 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { RevenueChart } from "@/components/revenue-chart";
-import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { bucketVolumeByRange, type TrendPoint } from "@/lib/format";
+import { bucketVolumeByRange, formatMoney, type TrendPoint } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const PRESETS = [
@@ -106,6 +105,8 @@ export function RevenueTrendChart({
     () => (range ? bucketVolumeByRange(payments, range.start, range.end) : []),
     [payments, range],
   );
+  const total = useMemo(() => buckets.reduce((sum, bucket) => sum + bucket.value, 0), [buckets]);
+  const activeDays = useMemo(() => buckets.filter((bucket) => bucket.value > 0).length, [buckets]);
 
   if (payments.length === 0) {
     return (
@@ -118,19 +119,32 @@ export function RevenueTrendChart({
   if (!mounted) {
     return (
       <div className="flex flex-col gap-4" aria-label="Loading payment trend">
-        <div className="flex flex-wrap gap-3">
-          <Skeleton className="h-8 w-40" />
-          <Skeleton className="h-8 w-64" />
-        </div>
-        <Skeleton className="h-36" />
+        <Skeleton className="h-9 w-48" />
+        <Skeleton className="h-54" />
+        <Skeleton className="h-8 w-full" />
       </div>
     );
   }
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="flex gap-1.5" role="group" aria-label="Date range presets">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="font-mono text-3xl font-semibold tabular-nums">{formatMoney(total, currency)}</p>
+        <p className="text-xs text-muted-foreground">
+          completed · {activeDays} {activeDays === 1 ? "day" : "days"} active
+        </p>
+      </div>
+      {range ? (
+        <RevenueChart buckets={buckets} currency={currency} />
+      ) : (
+        <p className="text-sm text-muted-foreground">Enter a valid date range to see the trend.</p>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <div
+          className="inline-flex rounded-lg border border-border bg-card p-0.5"
+          role="group"
+          aria-label="Date range presets"
+        >
           {PRESETS.map((preset) => (
             <button
               key={preset.key}
@@ -138,51 +152,53 @@ export function RevenueTrendChart({
               onClick={() => setMode(preset.key)}
               aria-pressed={mode === preset.key}
               className={cn(
-                "h-8 rounded-md border px-2.5 text-sm font-medium transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+                "h-7 rounded-md px-2.5 text-xs font-medium transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
                 mode === preset.key
-                  ? "border-transparent bg-primary text-primary-foreground"
-                  : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground",
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
               {preset.label}
             </button>
           ))}
         </div>
-        <div className="grid flex-1 grid-cols-2 gap-3 sm:max-w-80">
-          <Field>
-            <FieldLabel htmlFor="trend-from">From</FieldLabel>
-            <Input
-              id="trend-from"
-              type="date"
-              value={from}
-              max={to}
-              onChange={(event) => {
-                setFrom(event.target.value);
-                setMode("custom");
-              }}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="trend-to">To</FieldLabel>
-            <Input
-              id="trend-to"
-              type="date"
-              value={to}
-              min={from}
-              max={toInputValue(today)}
-              onChange={(event) => {
-                setTo(event.target.value);
-                setMode("custom");
-              }}
-            />
-          </Field>
+        <div className="flex flex-1 flex-wrap items-center gap-2 sm:justify-end">
+          <label htmlFor="trend-from" className="sr-only">
+            From date
+          </label>
+          <Input
+            id="trend-from"
+            type="date"
+            aria-label="From date"
+            className="h-8 w-auto text-xs"
+            value={from}
+            max={to}
+            onChange={(event) => {
+              setFrom(event.target.value);
+              setMode("custom");
+            }}
+          />
+          <span aria-hidden="true" className="text-xs text-muted-foreground">
+            →
+          </span>
+          <label htmlFor="trend-to" className="sr-only">
+            To date
+          </label>
+          <Input
+            id="trend-to"
+            type="date"
+            aria-label="To date"
+            className="h-8 w-auto text-xs"
+            value={to}
+            min={from}
+            max={toInputValue(today)}
+            onChange={(event) => {
+              setTo(event.target.value);
+              setMode("custom");
+            }}
+          />
         </div>
       </div>
-      {range ? (
-        <RevenueChart buckets={buckets} currency={currency} />
-      ) : (
-        <p className="text-sm text-muted-foreground">Enter a valid date range to see the trend.</p>
-      )}
     </div>
   );
 }
