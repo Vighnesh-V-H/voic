@@ -9,7 +9,7 @@ def test_standard_postgresql_url_uses_psycopg3_driver():
 
 
 def test_voice_calling_disabled_by_default():
-    assert is_configured(Settings()) is False
+    assert is_configured(Settings(_env_file=None)) is False
 
 
 def test_voice_calling_enabled_only_when_complete():
@@ -21,7 +21,7 @@ def test_voice_calling_enabled_only_when_complete():
         "voice_callback_token": "token_test_123",
     }
 
-    assert is_configured(Settings(**full)) is True
+    assert is_configured(Settings(_env_file=None, **full)) is True
     for missing in full:
         partial = {key: value for key, value in full.items() if key != missing}
-        assert is_configured(Settings(**partial)) is False
+        assert is_configured(Settings(_env_file=None, **partial)) is False
