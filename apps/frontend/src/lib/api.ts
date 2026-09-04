@@ -53,8 +53,13 @@ export type PaymentEvent = {
   provider_event_id: string;
   event_type: string;
   provider_payment_id?: string | null;
+  provider_price_id?: string | null;
   amount?: number | null;
   currency?: string | null;
+  customer_reference?: string | null;
+  customer_email?: string | null;
+  customer_phone?: string | null;
+  payment_status?: string | null;
   occurred_at: string;
 };
 

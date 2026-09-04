@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     stripe_oauth_scope: str = "read_write"
     stripe_mode: str = "test"
     stripe_connect_webhook_secret: str = ""
+    stripe_webhook_account_id: str = ""
+    vobiz_auth_id: str = ""
+    vobiz_auth_token: str = ""
+    vobiz_caller_id: str = ""
+    vobiz_answer_url: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -507,7 +507,7 @@ def list_prices(
     provider: PaymentProvider = Depends(get_payment_provider),
 ) -> list[StripePriceResponse]:
     """
-    List all active one-time prices from the connected Stripe account.
+    List all active one-time and recurring prices from the connected Stripe account.
 
     Args:
         user: The authenticated user making the request.
@@ -552,6 +552,7 @@ def list_prices(
 class PaymentRequest(BaseModel):
     price_id: str
     quantity: int = 1
+    phone: str | None = None
 
 
 class PaymentResponse(BaseModel):
@@ -593,7 +594,7 @@ def payment_response(payment: Payment, client_secret: str | None = None, url: st
     )
 
 
-def price_details(provider: PaymentProvider, account_id: str, price_id: str) -> tuple[int, str]:
+def price_details(provider: PaymentProvider, account_id: str, price_id: str) -> tuple[int, str, str]:
     """
     Fetch and validate a Stripe price for payment creation.
 
@@ -603,10 +604,10 @@ def price_details(provider: PaymentProvider, account_id: str, price_id: str) -> 
         price_id: The Stripe price ID to retrieve.
 
     Returns:
-        A tuple of (unit_amount, currency) for the price.
+        A tuple of (unit_amount, currency, price_type) for the price.
 
     Raises:
-        HTTPException: If the price is not found, not one-time, or missing required fields.
+        HTTPException: If the price is not found, has an unsupported type, or missing required fields.
     """
     try:
         price = provider.get_price(account_id, price_id)
@@ -615,9 +616,9 @@ def price_details(provider: PaymentProvider, account_id: str, price_id: str) -> 
     price_type = provider_value(price, "type")
     amount = provider_value(price, "unit_amount")
     currency = provider_value(price, "currency")
-    if price_type != "one_time" or not isinstance(amount, int) or not isinstance(currency, str):
+    if price_type not in ("one_time", "recurring") or not isinstance(amount, int) or not isinstance(currency, str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Price is not eligible for a payment")
-    return amount, currency
+    return amount, currency, price_type if isinstance(price_type, str) else "one_time"
 
 
 @payment_router.post("/payments", response_model=PaymentResponse, status_code=status.HTTP_201_CREATED)
@@ -630,6 +631,9 @@ def create_payment(
 ) -> PaymentResponse:
     """
     Create a new PaymentIntent for the given price and quantity.
+
+    Accepts one-time and recurring prices; a PaymentIntent always collects a
+    one-off charge for the price amount times quantity.
 
     Args:
         payload: The payment request containing price_id and quantity.
@@ -657,7 +661,7 @@ def create_payment(
         if existing is not None:
             return payment_response(existing)
     connection = active_connection(db, user.merchant_id)
-    amount, currency = price_details(provider, connection.provider_account_id, payload.price_id)
+    amount, currency, _ = price_details(provider, connection.provider_account_id, payload.price_id)
     payment = Payment(
         merchant_id=user.merchant_id,
         provider_connection_id=connection.id,
@@ -685,7 +689,12 @@ def create_payment(
             if existing is not None:
                 return payment_response(existing)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="PAYMENT_ALREADY_EXISTS") from error
-    metadata = {"voic_payment_id": payment.id}
+    metadata = {
+        "voic_payment_id": payment.id,
+    }
+
+    if payload.phone:
+        metadata["phone"] = payload.phone
     try:
         provider_payment = provider.create_payment_intent(
             connection.provider_account_id,
@@ -695,6 +704,7 @@ def create_payment(
             payment.idempotency_key or payment.id,
         )
     except Exception as error:
+        logger.warning("Stripe PaymentIntent creation failed: %s", error)
         payment.status = "FAILED"
         db.commit()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="STRIPE_PROVIDER_ERROR") from error
@@ -747,6 +757,10 @@ def create_payment_link(
     """
     Create a new Stripe Payment Link for the given price and quantity.
 
+    Accepts one-time and recurring prices. Stripe infers the checkout mode
+    from the price type; the Voic payment ID is attached for correlation in
+    either mode.
+
     Args:
         payload: The payment request containing price_id and quantity.
         idempotency_key: Optional idempotency key for safe retries.
@@ -773,7 +787,7 @@ def create_payment_link(
         )
         if existing is not None:
             return payment_response(existing)
-    amount, currency = price_details(provider, connection.provider_account_id, payload.price_id)
+    amount, currency, price_type = price_details(provider, connection.provider_account_id, payload.price_id)
     payment = Payment(
         merchant_id=user.merchant_id,
         provider_connection_id=connection.id,
@@ -809,8 +823,10 @@ def create_payment_link(
             payload.quantity,
             metadata,
             payment.idempotency_key or payment.id,
+            price_type=price_type,
         )
     except Exception as error:
+        logger.warning("Stripe Payment Link creation failed: %s", error)
         payment.status = "FAILED"
         db.commit()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="STRIPE_PROVIDER_ERROR") from error

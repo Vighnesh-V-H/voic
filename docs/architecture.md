@@ -157,11 +157,11 @@ All payment creation is scoped to the authenticated merchant's active provider c
 
 ### PaymentIntent
 
-`POST /api/v1/payments` creates a Stripe PaymentIntent for the selected one-time price and quantity. The PaymentIntent starts in a non-terminal Voic status and includes a non-sensitive Voic payment ID in Stripe metadata. The response may include Stripe's client secret for client-side confirmation; it must never include the platform secret or OAuth credentials.
+`POST /api/v1/payments` creates a Stripe PaymentIntent for the selected one-time or recurring price and quantity. A PaymentIntent always collects a one-off charge for the price amount times quantity. The PaymentIntent starts in a non-terminal Voic status and includes a non-sensitive Voic payment ID in Stripe metadata. The response may include Stripe's client secret for client-side confirmation; it must never include the platform secret or OAuth credentials.
 
 ### Payment Link
 
-`POST /api/v1/payment-links` creates a Stripe-hosted Payment Link using an existing one-time Stripe price and quantity. The request includes the Voic payment ID in both Payment Link metadata and `payment_intent_data.metadata`, allowing the resulting PaymentIntent webhook to correlate the local payment after the merchant boundary is resolved from the signed event account. Voic stores and returns the hosted URL.
+`POST /api/v1/payment-links` creates a Stripe-hosted Payment Link using an existing one-time or recurring Stripe price and quantity. Stripe infers the checkout mode from the price type. The request includes the Voic payment ID in Payment Link metadata (Stripe copies it to resulting Checkout Sessions) plus the mode-specific container — `payment_intent_data.metadata` for one-time prices, `subscription_data.metadata` for recurring prices — allowing the resulting PaymentIntent or Checkout Session webhook to correlate the local payment after the merchant boundary is resolved from the signed event account. Voic stores and returns the hosted URL.
 
 The frontend and any future voice agent consume the backend response. They never manufacture Stripe URLs.
 
@@ -174,6 +174,12 @@ POST /api/v1/webhooks/stripe
 ```
 
 This is a public endpoint protected by Stripe signature verification. It is configured once as a platform-level Connect webhook with `connect=true` and receives events for all connected accounts. The signing secret is deployment-managed through `STRIPE_CONNECT_WEBHOOK_SECRET`; it is not stored per merchant.
+
+For local account-level forwarding that omits `account`/`context`, Voic first
+uses Stripe object references, then `STRIPE_WEBHOOK_ACCOUNT_ID`, and finally a
+single connected Stripe account when exactly one exists. This fallback is
+intentionally ambiguous when multiple accounts exist; production should use a
+Connect webhook so Stripe includes the signed account boundary.
 
 Processing order:
 
@@ -191,6 +197,8 @@ Parse the event
       |
       v
 Resolve event.account to exactly one ProviderConnection
+(or Stripe-asserted provider references when the envelope
+carries no account; never metadata — see ADR-0004)
       |
       v
 Deduplicate provider_event_id
@@ -200,17 +208,29 @@ Persist PaymentEvent
       |
       v
 Update the matching Payment when supported
+(capturing subscription IDs; invoice events
+synchronize subscription-mode payments)
       |
       v
 Return 2xx quickly
 ```
 
-Stripe's event `account` field (or the equivalent top-level `context` field in newer Stripe API versions) is the authoritative merchant boundary. Both are Stripe-signed envelope values. Customer email, phone, amount, description, frontend data, Stripe metadata, and any other untrusted values are never used to select a merchant; metadata (`voic_payment_id`) is only used to correlate a payment after the merchant boundary is resolved. An event with a missing account/context is rejected.
+When a payment event contains only a PaymentMethod or Customer ID, the Stripe
+provider may be queried within the connected-account scope to normalize missing
+customer contact fields.
+
+Stripe's event `account` field (or the equivalent top-level `context` field in newer Stripe API versions) is the authoritative merchant boundary. Both are Stripe-signed envelope values. Customer email, phone, amount, description, frontend data, Stripe metadata, and any other untrusted values are never used to select a merchant; metadata (`voic_payment_id`) is only used to correlate a payment after the merchant boundary is resolved. An event with a missing account/context is accepted only through the documented account-less fallback.
 
 Phase 1 handles at least:
 
 - `payment_intent.succeeded` -> `COMPLETED`
 - `payment_intent.payment_failed` -> `FAILED`
+- `checkout.session.completed` -> `COMPLETED` (paid/complete)
+- `checkout.session.async_payment_failed` / `checkout.session.expired` -> `FAILED`
+- `invoice.paid` / `invoice.payment_succeeded` -> `COMPLETED` (subscription mode)
+- `invoice.payment_failed` -> `FAILED` (subscription mode)
+- `invoice_payment.paid` -> `COMPLETED` (new invoice-payment model)
+- `invoice_payment.failed` -> `FAILED` (new invoice-payment model)
 - `account.application.deauthorized` -> delete the matching merchant's Voic-owned Stripe data (explicit delete-with-consent policy, see section 4)
 
 Events may be duplicated or arrive out of order. Each event is persisted independently and no business logic assumes delivery order. Unknown connected accounts, invalid payloads, invalid signatures, and duplicate events have explicit outcomes and never cross merchant boundaries.
@@ -258,7 +278,10 @@ Webhook:
 POST /api/v1/webhooks/stripe
 ```
 
-Responses expose provider IDs, status, amount, currency, and hosted URLs where applicable. They never expose platform secrets, OAuth credentials, webhook secrets, or unrestricted raw webhook payloads.
+Responses expose provider IDs, status, amount, currency, normalized customer
+contact fields from payment events, and hosted URLs where applicable. They never
+expose platform secrets, OAuth credentials, webhook secrets, or unrestricted raw
+webhook payloads.
 
 ## 9. Security and Tenant Isolation
 
@@ -271,7 +294,8 @@ Credentials and sensitive data follow these rules:
 - Platform secret and webhook secret come from environment or secret management.
 - Secrets are never committed, logged, or returned to the frontend.
 - Raw webhook payloads are retained for restricted developer debugging only: stored server-side, never returned by merchant APIs, never logged, and never sent to the frontend. See ADR-0003 for the retention policy.
-- Payment metadata contains only non-sensitive identifiers.
+- Metadata is never used for tenant selection; normalized customer contact
+  fields are stored only after the signed merchant boundary is resolved.
 - Test mode uses synthetic data only.
 
 ## 10. Frontend
@@ -298,7 +322,9 @@ Automated tests exercise external behavior at the API boundary using a fake prov
 - Valid and invalid raw-body webhook signatures
 - Malformed payloads, missing account/context, and unknown connected accounts
 - Duplicate event idempotency and out-of-order event persistence
-- Success and failure payment-status synchronization
+ - Success and failure payment-status synchronization
+ - Subscription ID capture from Checkout Sessions and invoice success/failure synchronization
+ - Account-less delivery correlation via Stripe-asserted provider references (see ADR-0004)
 - Deauthorization and disconnect deletion of Voic-owned Stripe data with explicit merchant confirmation
 - Metadata can never select a merchant (correlation only after the signed account boundary is resolved)
 - Cross-merchant access rejection
@@ -310,7 +336,7 @@ Manual acceptance runs entirely in Stripe Test Mode. The Stripe CLI or another t
 Phase 1 does not include:
 
 - Product creation from Voic
-- Subscriptions, recurring prices, refunds, disputes, payouts, or chargebacks
+- Subscription lifecycle management (invoices, trials, plan changes), refunds, disputes, payouts, or chargebacks
 - Production credentials or live payments
 - Voice agents, telephony, STT, TTS, LLMs, or LangGraph
 - RecoveryCase, eligibility, calling, email delivery, or recovery attribution
@@ -325,7 +351,7 @@ Phase 1 is complete when:
 - An existing Stripe Test Mode account can connect through Standard OAuth with CSRF-protected state.
 - The connected Stripe account ID and connection metadata are stored without exposing credentials.
 - Products and prices can be retrieved from the connected account.
-- A PaymentIntent and a Payment Link can be created from an existing one-time price.
+- A PaymentIntent and a Payment Link can be created from an existing one-time or recurring price.
 - The centralized Connect webhook verifies the raw request body.
 - The event's connected account maps to exactly one merchant.
 - Duplicate events are idempotent and raw verified payloads are retained per the restricted-debugging policy (ADR-0003).

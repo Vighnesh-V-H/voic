@@ -71,7 +71,7 @@ export function ProductPaymentForm({
   if (prices.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        No active one-time prices for this product. Add one in Stripe, then reload.
+        No active prices for this product. Add one in Stripe, then reload.
       </p>
     );
   }
@@ -118,7 +118,7 @@ export function ProductPaymentForm({
                 <SelectLabel>{productName}</SelectLabel>
                 {prices.map((price) => (
                   <SelectItem key={price.id} value={price.id}>
-                    {formatMoney(price.unit_amount, price.currency)} · {price.id}
+                    {formatMoney(price.unit_amount, price.currency)} · {price.type ?? "price"} · {price.id}
                   </SelectItem>
                 ))}
               </SelectGroup>
