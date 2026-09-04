@@ -34,14 +34,17 @@ logger = getLogger(__name__)
 
 class StatusRequest(BaseModel):
     payment_id: str = Field(min_length=1, max_length=36)
+    conversation_id: str = Field(min_length=1, max_length=255)
 
 
 class CheckoutRequest(BaseModel):
     payment_id: str = Field(min_length=1, max_length=36)
+    conversation_id: str = Field(min_length=1, max_length=255)
 
 
 class EmailRequest(BaseModel):
     payment_id: str = Field(min_length=1, max_length=36)
+    conversation_id: str = Field(min_length=1, max_length=255)
     to: EmailStr
     subject: str = Field(min_length=1, max_length=200)
     body: str = Field(min_length=1, max_length=5000)
@@ -80,7 +83,7 @@ def agent_get_payment_status(
     if denied is not None:
         return denied
     try:
-        result = get_payment_status(db, payload.payment_id)
+        result = get_payment_status(db, payload.payment_id, payload.conversation_id)
         logger.info("Agent get-payment-status completed for payment %s", result["payment_id"])
         return result
     except ToolError as error:
@@ -102,7 +105,7 @@ def agent_create_checkout_link(
     if denied is not None:
         return denied
     try:
-        result = create_checkout_link(db, settings, payload.payment_id)
+        result = create_checkout_link(db, settings, payload.payment_id, payload.conversation_id)
         logger.info("Agent create-checkout-link completed for payment %s", result["payment_id"])
         return result
     except ToolError as error:
@@ -124,7 +127,7 @@ def agent_send_email(
     if denied is not None:
         return denied
     try:
-        result = send_email(db, payload.payment_id, str(payload.to), payload.subject, payload.body)
+        result = send_email(db, payload.payment_id, payload.conversation_id, str(payload.to), payload.subject, payload.body)
         logger.info("Agent send-email completed for payment %s", payload.payment_id.strip())
         return result
     except ToolError as error:

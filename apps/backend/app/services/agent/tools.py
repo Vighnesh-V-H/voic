@@ -39,24 +39,36 @@ class ToolError(Exception):
         self.http_status = http_status
 
 
-def _get_payment_or_raise(db: Session, payment_id: str) -> Payment:
+def _get_payment_or_raise(db: Session, payment_id: str, conversation_id: str) -> Payment:
     normalized_id = payment_id.strip()
+    normalized_conv = conversation_id.strip()
+    if not normalized_conv:
+        raise ToolError("MISSING_CONVERSATION_ID", "conversation_id is required", 400)
     payment = db.scalar(select(Payment).where(Payment.id == normalized_id))
     if payment is None:
         raise ToolError("PAYMENT_NOT_FOUND", "Payment not found", 404)
-    active_call_id = db.scalar(
-        select(CallAttempt.id).where(
+    active_call = db.scalar(
+        select(CallAttempt).where(
             CallAttempt.payment_id == payment.id,
             CallAttempt.merchant_id == payment.merchant_id,
             CallAttempt.provider == "vobiz",
             CallAttempt.status == "BRIDGED",
         )
     )
-    if active_call_id is None:
+    if active_call is None:
         raise ToolError(
             "CALL_NOT_ACTIVE",
             "Payment tools are only available during its active recovery call",
             409,
+        )
+    if (
+        not active_call.elevenlabs_conversation_id
+        or active_call.elevenlabs_conversation_id != normalized_conv
+    ):
+        raise ToolError(
+            "CONVERSATION_MISMATCH",
+            "Tool request does not belong to this call",
+            403,
         )
     return payment
 
@@ -86,7 +98,7 @@ def _provider_value(value: object, name: str) -> object:
     return getattr(value, name, None)
 
 
-def get_payment_status(db: Session, payment_id: str) -> dict[str, Any]:
+def get_payment_status(db: Session, payment_id: str, conversation_id: str) -> dict[str, Any]:
     """Return the status snapshot the voice agent reads out to the caller.
 
     ``customer_email`` / ``customer_phone`` are not columns on ``payments``;
@@ -94,7 +106,7 @@ def get_payment_status(db: Session, payment_id: str) -> dict[str, Any]:
     the latest event for this payment's ``provider_payment_id`` is used with
     a ``None`` fallback when no event exists yet.
     """
-    payment = _get_payment_or_raise(db, payment_id)
+    payment = _get_payment_or_raise(db, payment_id, conversation_id)
 
     customer_email: str | None = None
     customer_phone: str | None = None
@@ -113,7 +125,7 @@ def get_payment_status(db: Session, payment_id: str) -> dict[str, Any]:
     }
 
 
-def create_checkout_link(db: Session, settings: Settings, payment_id: str) -> dict[str, Any]:
+def create_checkout_link(db: Session, settings: Settings, payment_id: str, conversation_id: str) -> dict[str, Any]:
     """Create a fresh Stripe Payment Link for an existing payment.
 
     Reuses the same provider-account scoping as
@@ -127,7 +139,7 @@ def create_checkout_link(db: Session, settings: Settings, payment_id: str) -> di
     The new link fields are stored on the payment and its status is set to
     ``PENDING`` before returning.
     """
-    payment = _get_payment_or_raise(db, payment_id)
+    payment = _get_payment_or_raise(db, payment_id, conversation_id)
     if payment.status not in {"FAILED", "PENDING"}:
         raise ToolError(
             "PAYMENT_NOT_ACTIONABLE",
@@ -204,7 +216,7 @@ def create_checkout_link(db: Session, settings: Settings, payment_id: str) -> di
     return {"payment_id": payment.id, "checkout_url": url, "status": payment.status}
 
 
-def send_email(db: Session, payment_id: str, to: str, subject: str, body: str) -> dict[str, Any]:
+def send_email(db: Session, payment_id: str, conversation_id: str, to: str, subject: str, body: str) -> dict[str, Any]:
     """Send (demo) an email related to a payment.
 
     No email provider is configured in this backend (see module docstring),
@@ -212,7 +224,7 @@ def send_email(db: Session, payment_id: str, to: str, subject: str, body: str) -
     provider is added, perform the send here and return
     ``{"sent": True, "to": to}`` without the ``demo`` flag.
     """
-    payment = _get_payment_or_raise(db, payment_id)
+    payment = _get_payment_or_raise(db, payment_id, conversation_id)
     event = _latest_customer_event(db, payment)
     expected_email = event.customer_email.strip() if event and event.customer_email else ""
     if not expected_email:
