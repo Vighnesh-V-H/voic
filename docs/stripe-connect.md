@@ -107,10 +107,12 @@ payment_intent.payment_failed
 VOIC should:
 
 1. Verify the webhook signature.
-2. Identify the connected Stripe account.
-3. Find the corresponding VOIC payment.
+2. Identify the connected Stripe account from the signed event envelope (`account`, or top-level `context` in newer API versions) and resolve it to exactly one VOIC merchant. Never use metadata or other payload values to select the merchant; an event with a missing account/context is rejected.
+3. Find the corresponding VOIC payment (metadata `voic_payment_id` correlation, scoped to the resolved merchant).
 4. Update its status.
 5. Store the Stripe event ID to prevent duplicate processing.
+
+Deauthorization (`account.application.deauthorized`) and merchant-initiated disconnect delete the merchant's VOIC-owned Stripe data (connections, payments, events) after explicit merchant confirmation; the merchant stays signed in.
 
 Example:
 

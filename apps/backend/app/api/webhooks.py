@@ -182,21 +182,15 @@ async def stripe_webhook(
 
     event_id = event.get("id")
     event_type = event.get("type")
+    # Merchant boundary: only Stripe-signed top-level account/context fields
+    # select the merchant. Metadata and other untrusted values must never
+    # select a merchant; they are only used after the boundary is resolved.
     account_id = event.get("account") or event.get("context")
 
     data = event.get("data")
     event_object = data.get("object") if isinstance(data, Mapping) else None
     metadata = event_object.get("metadata") if isinstance(event_object, Mapping) else None
     metadata = metadata if isinstance(metadata, Mapping) else {}
-
-    if not account_id and isinstance(event_object, Mapping):
-        voic_payment_id = metadata.get("voic_payment_id")
-        if isinstance(voic_payment_id, str):
-            payment_record = db.scalar(
-                select(Payment).where(Payment.id == voic_payment_id)
-            )
-            if payment_record is not None:
-                account_id = payment_record.provider_account_id
 
     if not all(isinstance(value, str) and value for value in (event_id, event_type, account_id)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="WEBHOOK_INVALID_PAYLOAD")
