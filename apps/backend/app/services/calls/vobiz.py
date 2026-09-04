@@ -34,6 +34,11 @@ from app.models.payment import Payment
 logger = getLogger(__name__)
 
 CALL_TRIGGER_EVENTS = frozenset({"payment_intent.payment_failed"})
+# Demo-only: successful payments reliably carry the customer phone collected
+# at checkout, so the flag can also dial on success for demos.
+DEMO_SUCCESS_TRIGGER_EVENTS = frozenset(
+    {"checkout.session.completed", "payment_intent.succeeded"}
+)
 VOBIZ_API_BASE = "https://api.vobiz.ai/api/v1"
 REQUEST_TIMEOUT_SECONDS = 10
 RECOVERY_ANSWER_PATH = "/api/v1/voice/answer"
@@ -151,7 +156,9 @@ def trigger_recovery_call(
         ``"called:<provider_id>"`` on success, otherwise a
         ``"skipped:<reason>"`` string describing why no call was placed.
     """
-    if event_type not in CALL_TRIGGER_EVENTS:
+    if event_type not in CALL_TRIGGER_EVENTS and not (
+        settings.voice_demo_success_trigger and event_type in DEMO_SUCCESS_TRIGGER_EVENTS
+    ):
         return "skipped:event-not-trigger"
     if not customer_phone:
         logger.info("Skipping recovery call for payment %s: no customer phone", payment_id)
@@ -181,12 +188,23 @@ def trigger_recovery_call(
         if payment is None:
             logger.info("Skipping recovery call for unknown payment %s", payment_id)
             return "skipped:payment-not-found"
-        if payment.status == "COMPLETED":
-            logger.info("Skipping recovery call for completed payment %s", payment_id)
-            return "skipped:payment-completed"
-        if payment.status != "FAILED":
-            logger.info("Skipping recovery call for payment %s with status %s", payment_id, payment.status)
-            return "skipped:payment-not-failed"
+        if settings.voice_demo_success_trigger:
+            # Demo mode: completed payments are callable so success can be
+            # shown end to end.
+            if payment.status not in ("FAILED", "COMPLETED"):
+                logger.info(
+                    "Skipping demo recovery call for payment %s with status %s",
+                    payment_id,
+                    payment.status,
+                )
+                return "skipped:payment-not-callable"
+        else:
+            if payment.status == "COMPLETED":
+                logger.info("Skipping recovery call for completed payment %s", payment_id)
+                return "skipped:payment-completed"
+            if payment.status != "FAILED":
+                logger.info("Skipping recovery call for payment %s with status %s", payment_id, payment.status)
+                return "skipped:payment-not-failed"
 
         attempt = CallAttempt(
             merchant_id=merchant_id,

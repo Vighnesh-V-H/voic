@@ -657,6 +657,25 @@ async def stripe_webhook(
                 customer_phone = customer_phone or customer_phone_from_stripe
             except Exception:
                 logger.warning("Could not retrieve Customer for Stripe webhook event=%s", event_id)
+        if (
+            (customer_email is None or customer_phone is None)
+            and provider_payment_id is not None
+        ):
+            # Checkout collects the customer phone on the Checkout Session
+            # (customer_details), not on the PaymentIntent or its payment
+            # method, so failure events need the session lookup fallback.
+            try:
+                checkout_session = provider.get_checkout_session_for_payment_intent(
+                    connection.provider_account_id, provider_payment_id
+                )
+                if checkout_session is not None:
+                    _, session_email, session_phone = customer_data(checkout_session, {})
+                    customer_email = customer_email or session_email
+                    customer_phone = customer_phone or session_phone
+            except Exception:
+                logger.warning(
+                    "Could not retrieve Checkout Session for Stripe webhook event=%s", event_id
+                )
     now = datetime.now(UTC)
     occurred_at = event_time(event.get("created"))
     payment_event = PaymentEvent(
@@ -745,10 +764,15 @@ async def stripe_webhook(
     except IntegrityError:
         db.rollback()
         return {"status": "duplicate"}
-    if failed_transition and payment is not None:
-        # Call trigger: this event flipped the payment to FAILED, so enqueue
-        # one Vobiz recovery call. Runs after the response; the trigger
-        # itself decides (phone present, Vobiz configured) and never raises.
+    if (
+        failed_transition
+        or (completed_transition and settings.voice_demo_success_trigger)
+    ) and payment is not None:
+        # Call trigger: this event flipped the payment (to FAILED, or — demo
+        # flag only — to COMPLETED, where the checkout phone is reliable), so
+        # enqueue one Vobiz recovery call. Runs after the response; the
+        # trigger itself decides (phone present, Vobiz configured) and never
+        # raises.
         background.add_task(
             vobiz_calls.trigger_recovery_call,
             settings,

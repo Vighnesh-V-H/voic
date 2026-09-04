@@ -168,6 +168,17 @@ class StripeProvider:
 
         return self._normalize(stripe.Customer.retrieve(customer_id, **self._account_options(account_id)))
 
+    def get_checkout_session_for_payment_intent(self, account_id: str, payment_intent_id: str):
+        """Retrieve the newest Checkout Session that created a PaymentIntent."""
+        import stripe
+
+        sessions = stripe.checkout.Session.list(
+            **self._account_options(account_id),
+            payment_intent=payment_intent_id,
+            limit=1,
+        )
+        return self._normalize(sessions.data[0]) if sessions.data else None
+
     def create_payment_intent(self, account_id: str, amount: int, currency: str, metadata, idempotency_key: str):
         """
         Create a PaymentIntent on a connected Stripe account.

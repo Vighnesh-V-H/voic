@@ -57,6 +57,9 @@ def answer_call(
 
     payment = None
     if payment_id and attempt_id:
+        callable_statuses = {"FAILED"}
+        if settings.voice_demo_success_trigger:
+            callable_statuses.add("COMPLETED")
         payment = db.scalar(
             select(Payment)
             .join(
@@ -66,7 +69,7 @@ def answer_call(
             )
             .where(
                 Payment.id == payment_id,
-                Payment.status == "FAILED",
+                Payment.status.in_(callable_statuses),
                 CallAttempt.id == attempt_id,
                 CallAttempt.provider == "vobiz",
             )
