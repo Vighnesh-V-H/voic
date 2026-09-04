@@ -86,10 +86,12 @@ def test_answer_returns_valid_recovery_xml_for_failed_payment(client, fake_provi
     )
     db_session.add(attempt)
     db_session.commit()
-    app.dependency_overrides[get_settings] = lambda: Settings(**VOBIZ_SETTINGS)
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None, **{**VOBIZ_SETTINGS, "vobiz_public_base_url": "", "voice_ws_base_url": ""}
+    )
 
     try:
-        response = client.post(recovery_answer_url(Settings(**VOBIZ_SETTINGS), payment_id, attempt.id))
+        response = client.post(recovery_answer_url(Settings(_env_file=None, **VOBIZ_SETTINGS), payment_id, attempt.id))
     finally:
         app.dependency_overrides.pop(get_settings, None)
 
@@ -115,8 +117,8 @@ def test_answer_returns_safe_xml_for_unknown_or_completed_payment(client, fake_p
     )
     db_session.add(attempt)
     db_session.commit()
-    settings = Settings(**VOBIZ_SETTINGS)
-    app.dependency_overrides[get_settings] = lambda: Settings(**VOBIZ_SETTINGS)
+    settings = Settings(_env_file=None, **VOBIZ_SETTINGS)
+    app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None, **VOBIZ_SETTINGS)
 
     try:
         unknown = client.post(recovery_answer_url(settings, "missing-payment", "attempt-1"))
@@ -165,7 +167,7 @@ def test_answer_does_not_cross_merchant_call_attempts(client, fake_provider, db_
     )
     db_session.add_all([other_merchant, other_connection, other_payment, other_attempt])
     db_session.commit()
-    settings = Settings(**VOBIZ_SETTINGS)
+    settings = Settings(_env_file=None, **VOBIZ_SETTINGS)
     app.dependency_overrides[get_settings] = lambda: settings
 
     try:
@@ -178,7 +180,7 @@ def test_answer_does_not_cross_merchant_call_attempts(client, fake_provider, db_
 
 
 def test_answer_rejects_missing_or_wrong_callback_signature(client):
-    app.dependency_overrides[get_settings] = lambda: Settings(**VOBIZ_SETTINGS)
+    app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None, **VOBIZ_SETTINGS)
     try:
         missing = client.post("/api/v1/voice/answer?payment_id=payment-1")
         wrong = client.post(

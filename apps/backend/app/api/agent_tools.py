@@ -127,7 +127,7 @@ def agent_send_email(
     if denied is not None:
         return denied
     try:
-        result = send_email(db, payload.payment_id, payload.conversation_id, str(payload.to), payload.subject, payload.body)
+        result = send_email(db, settings, payload.payment_id, payload.conversation_id, str(payload.to), payload.subject, payload.body)
         logger.info("Agent send-email completed for payment %s", payload.payment_id.strip())
         return result
     except ToolError as error:

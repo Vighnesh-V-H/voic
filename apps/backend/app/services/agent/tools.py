@@ -4,11 +4,9 @@ Ticket 05 owns this module. It contains no FastAPI / auth code — the
 ``app.api.agent_tools`` router handles HTTP, headers, and error mapping,
 and calls into these functions.
 
-Email note: the backend has no SMTP / transactional-email provider
-(grep over ``app`` shows only Stripe-webhook ``customer_email`` tracking
-metadata, no send infrastructure). ``send_email`` therefore logs the
-request and returns a demo payload with ``demo: True`` until a real
-provider is wired in.
+Email note: the agent send-email tool sends through Resend when
+``RESEND_API_KEY`` + ``RESEND_FROM_EMAIL`` are configured; otherwise it
+logs the request and returns a demo payload with ``demo: True``.
 """
 
 from collections.abc import Mapping
@@ -23,6 +21,8 @@ from app.models.call_attempt import CallAttempt
 from app.models.payment import Payment
 from app.models.payment_event import PaymentEvent
 from app.models.provider_connection import ProviderConnection
+from app.services.agent import resend as resend_email_client
+from app.services.agent.resend import ResendEmailError
 from app.services.providers.stripe import StripeProvider
 
 logger = getLogger(__name__)
@@ -216,13 +216,17 @@ def create_checkout_link(db: Session, settings: Settings, payment_id: str, conve
     return {"payment_id": payment.id, "checkout_url": url, "status": payment.status}
 
 
-def send_email(db: Session, payment_id: str, conversation_id: str, to: str, subject: str, body: str) -> dict[str, Any]:
-    """Send (demo) an email related to a payment.
+def send_email(
+    db: Session, settings: Settings, payment_id: str, conversation_id: str, to: str, subject: str, body: str
+) -> dict[str, Any]:
+    """Send an email related to a payment through Resend.
 
-    No email provider is configured in this backend (see module docstring),
-    so the request is logged and a demo payload returned. When a real
-    provider is added, perform the send here and return
-    ``{"sent": True, "to": to}`` without the ``demo`` flag.
+    Recipient is always validated against the customer email captured by
+    this payment's provider events (merchant/provider scoped), never
+    trusted from the request alone. When Resend is not configured the
+    request is logged and a demo payload with ``demo: True`` returned;
+    when it is configured the email is delivered and the Resend message
+    ID is returned as ``email_id``.
     """
     payment = _get_payment_or_raise(db, payment_id, conversation_id)
     event = _latest_customer_event(db, payment)
@@ -246,4 +250,15 @@ def send_email(db: Session, payment_id: str, conversation_id: str, to: str, subj
         domain,
         len(body),
     )
-    return {"sent": True, "to": expected_email, "demo": True}
+    if not resend_email_client.is_configured(settings):
+        return {"sent": True, "to": expected_email, "demo": True}
+    try:
+        message_id = resend_email_client.send_email(settings, expected_email, subject, body)
+    except ResendEmailError as error:
+        logger.warning(
+            "Agent tool send-email Resend failure for payment %s (%s)",
+            payment.id,
+            type(error).__name__,
+        )
+        raise ToolError("EMAIL_SEND_FAILED", "Email send failed", 502) from error
+    return {"sent": True, "to": expected_email, "email_id": message_id}
