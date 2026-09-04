@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppSidebar } from "@/components/app-sidebar";
@@ -51,7 +52,13 @@ export default async function ProtectedLayout({
           <p className="truncate text-sm font-semibold sm:text-base">
             {identity.merchant.name}
           </p>
-          <div className="ml-auto flex items-center">
+          <div className="ml-auto flex items-center gap-1">
+            <Link
+              href="/"
+              className="hidden rounded-md px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground sm:block"
+            >
+              View site
+            </Link>
             <ThemeToggle />
           </div>
         </header>

@@ -24,7 +24,12 @@ class Settings(BaseSettings):
     vobiz_answer_url: str = ""
     vobiz_public_base_url: str = ""
     voice_callback_token: str = ""
+    voice_ws_base_url: str = ""
     voice_demo_success_trigger: bool = False
+    elevenlabs_api_key: str = ""
+    elevenlabs_agent_id: str = ""
+    elevenlabs_phone_number_id: str = ""
+    agent_tool_token: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

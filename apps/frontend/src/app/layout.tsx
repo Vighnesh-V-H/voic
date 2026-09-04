@@ -27,6 +27,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     >
       <body>
         <div aria-hidden="true" className="ambient-blob" />
+        <noscript>
+          <style>{".reveal{opacity:1 !important;transform:none !important;}"}</style>
+        </noscript>
         <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>

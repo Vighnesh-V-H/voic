@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { ArrowLeftIcon } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
 import { SiteHeader } from "@/components/site-header";
 
@@ -7,21 +9,26 @@ import { SiteHeader } from "@/components/site-header";
  * Layout component for authentication pages (login and signup).
  *
  * @param props - Component props containing children to render.
- * @returns A layout with site header and navigation back to home.
+ * @returns A layout with the shared site header and centered auth content.
  */
 export default function AuthLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <main className="hero-glow mx-auto flex min-h-screen w-full max-w-5xl flex-col px-5 pb-16">
+    <div className="flex min-h-screen flex-col">
       <SiteHeader>
         <Button
-          variant="link"
+          variant="ghost"
           nativeButton={false}
-          render={<Link href="/">Back to home</Link>}
+          render={
+            <Link href="/">
+              <ArrowLeftIcon data-icon="inline-start" />
+              Back to home
+            </Link>
+          }
         />
       </SiteHeader>
-      {children}
-    </main>
+      <main className="mx-auto w-full max-w-6xl flex-1 px-5">{children}</main>
+    </div>
   );
 }
