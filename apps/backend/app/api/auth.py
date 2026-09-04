@@ -1,3 +1,5 @@
+from hashlib import sha256
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -5,6 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
+from app.models.auth_session import AuthSession
 from app.models.merchant import Merchant
 from app.models.user import User
 from app.schemas.auth import IdentityResponse, LoginRequest, MerchantResponse, SignupRequest
@@ -74,6 +77,30 @@ def login(
 @router.get("/me", response_model=IdentityResponse)
 def me(user: User = Depends(current_user)) -> IdentityResponse:
     return identity_response(user)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    raw_token = request.cookies.get(settings.session_cookie_name)
+    if raw_token:
+        token_hash = sha256(raw_token.encode("utf-8")).hexdigest()
+        session = db.scalar(select(AuthSession).where(AuthSession.token_hash == token_hash))
+        if session is not None:
+            db.delete(session)
+            db.commit()
+    response.delete_cookie(
+        key=settings.session_cookie_name,
+        path="/",
+        samesite="lax",
+        secure=settings.cookie_secure,
+        httponly=True,
+    )
+    return None
 
 
 @router.get("/merchants/{merchant_id}", response_model=MerchantResponse)

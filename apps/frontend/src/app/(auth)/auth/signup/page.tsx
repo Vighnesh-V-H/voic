@@ -14,12 +14,12 @@ import {
  */
 export default function SignupPage() {
   return (
-    <section className="grid flex-1 items-center gap-11 py-12 lg:grid-cols-2 lg:gap-20">
+    <section className="grid flex-1 items-center gap-11 py-16 lg:grid-cols-2 lg:gap-20">
       <div>
-        <p className="mb-5 text-xs font-extrabold tracking-[0.14em] text-primary uppercase">
+        <p className="mb-5 text-xs font-semibold tracking-[0.14em] text-muted-foreground uppercase">
           Start with the boundary
         </p>
-        <h1 className="mb-6 max-w-xl text-5xl leading-[0.95] font-extrabold tracking-tighter text-balance sm:text-6xl">
+        <h1 className="font-editorial mb-6 max-w-xl text-5xl text-balance sm:text-6xl">
           Build your recovery foundation with confidence.
         </h1>
         <p className="max-w-xl text-lg leading-relaxed text-muted-foreground">
@@ -27,7 +27,7 @@ export default function SignupPage() {
           events will belong to it.
         </p>
       </div>
-      <Card className="shadow-[12px_12px_0_0_var(--secondary)]">
+      <Card className="card-hover">
         <CardHeader>
           <CardTitle className="text-2xl">Create your account</CardTitle>
           <CardDescription>

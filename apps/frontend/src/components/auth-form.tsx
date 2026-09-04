@@ -76,7 +76,7 @@ export function AuthForm({ mode }: AuthFormProps) {
                 name="merchant_name"
                 value={merchantName}
                 onChange={(event) => setMerchantName(event.target.value)}
-                placeholder="Acme Store"
+                placeholder="Your store name"
                 required
               />
             </Field>
@@ -134,6 +134,7 @@ export function AuthForm({ mode }: AuthFormProps) {
         <Button
           variant="link"
           className="h-auto p-0 text-sm"
+          nativeButton={false}
           render={
             <Link href={isSignup ? "/auth/login" : "/auth/signup"}>
               {isSignup ? "Log in" : "Create an account"}

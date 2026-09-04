@@ -280,7 +280,7 @@ def test_reconnect_updates_existing_provider_connection(client, fake_provider):
     assert client.get("/api/v1/stripe/connection").json()["provider_account_id"] == "acct_test_123"
 
 
-def test_reconnect_preserves_old_account_payment_history(client, fake_provider, webhook_secret):
+def test_reconnect_removes_old_account_data(client, fake_provider, webhook_secret):
     payment_id = connected_payment(client, fake_provider)
     fake_provider.account_id = "acct_test_456"
     state = connect_state(client)
@@ -290,7 +290,9 @@ def test_reconnect_preserves_old_account_payment_history(client, fake_provider, 
     response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
 
     assert response.status_code == 200
-    assert client.get(f"/api/v1/payments/{payment_id}").json()["status"] == "COMPLETED"
+    assert response.json() == {"status": "ignored"}
+    assert client.get(f"/api/v1/payments/{payment_id}").status_code == 404
+    assert client.get("/api/v1/webhooks/payment-events").json() == []
     assert client.get("/api/v1/stripe/connection").json()["provider_account_id"] == "acct_test_456"
 
 
@@ -310,10 +312,10 @@ def test_same_stripe_account_cannot_be_connected_to_two_merchants(client, fake_p
     assert response.json()["detail"] == "STRIPE_ACCOUNT_ALREADY_CONNECTED"
 
 
-def test_disconnect_deauthorizes_and_preserves_connection_record(client, fake_provider):
-    signup_and_login(client, "owner@example.com", "Acme Store")
-    state = connect_state(client)
-    client.get(f"/api/v1/stripe/callback?code=oauth-code&state={state}", follow_redirects=False)
+def test_disconnect_removes_stripe_data_but_keeps_merchant_logged_in(client, fake_provider, webhook_secret):
+    payment_id = connected_payment(client, fake_provider)
+    payload = webhook_payload(payment_id)
+    client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
 
     response = client.delete("/api/v1/stripe/connection")
 
@@ -322,6 +324,10 @@ def test_disconnect_deauthorizes_and_preserves_connection_record(client, fake_pr
     connection = client.get("/api/v1/stripe/connection").json()
     assert connection["connected"] is False
     assert connection["status"] == "disconnected"
+    assert connection["provider_account_id"] is None
+    assert client.get(f"/api/v1/payments/{payment_id}").status_code == 404
+    assert client.get("/api/v1/payments").json() == []
+    assert client.get("/api/v1/webhooks/payment-events").json() == []
 
 
 def test_connection_is_scoped_to_authenticated_merchant(client, fake_provider):
@@ -540,7 +546,7 @@ def test_late_failure_does_not_downgrade_completed_payment(client, fake_provider
     assert client.get(f"/api/v1/payments/{payment_id}").json()["status"] == "COMPLETED"
 
 
-def test_deauthorization_disconnects_known_provider_connection(client, fake_provider, webhook_secret):
+def test_deauthorization_removes_merchant_stripe_data(client, fake_provider, webhook_secret):
     signup_and_login(client, "owner@example.com", "Acme Store")
     state = connect_state(client)
     client.get(f"/api/v1/stripe/callback?code=oauth-code&state={state}", follow_redirects=False)
@@ -550,8 +556,33 @@ def test_deauthorization_disconnects_known_provider_connection(client, fake_prov
     response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
 
     assert response.status_code == 200
-    assert client.get("/api/v1/stripe/connection").json()["status"] == "disconnected"
-    assert client.get(f"/api/v1/payments/{payment_id}").status_code == 200
+    assert response.json() == {"status": "processed"}
+    connection = client.get("/api/v1/stripe/connection").json()
+    assert connection["connected"] is False
+    assert connection["provider_account_id"] is None
+    assert client.get(f"/api/v1/payments/{payment_id}").status_code == 404
+    assert client.get("/api/v1/webhooks/payment-events").json() == []
+
+
+def test_deauthorized_unknown_account_is_ignored(client, fake_provider, webhook_secret):
+    payload = webhook_payload("not-a-payment", "account.application.deauthorized", account_id="acct_unknown")
+
+    response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+
+
+def test_webhook_ignores_events_after_disconnect(client, fake_provider, webhook_secret):
+    payment_id = connected_payment(client, fake_provider)
+    client.delete("/api/v1/stripe/connection")
+    payload = webhook_payload(payment_id, event_id="evt_after_disconnect")
+
+    response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+    assert client.get("/api/v1/webhooks/payment-events").json() == []
 
 
 def test_payments_and_events_are_scoped_to_the_current_merchant(client, fake_provider, webhook_secret):
@@ -587,15 +618,17 @@ def test_duplicate_webhook_is_ignored(client, fake_provider, webhook_secret):
     assert second.json() == {"status": "duplicate"}
 
 
-def test_webhook_rejects_unknown_connected_account(client, fake_provider, webhook_secret):
+def test_webhook_ignores_unknown_connected_account(client, fake_provider, webhook_secret):
+    signup_and_login(client, "owner@example.com", "Acme Store")
     payload = json.loads(webhook_payload("payment-id"))
     payload["account"] = "acct_unknown"
     payload = json.dumps(payload, separators=(",", ":"))
 
     response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "WEBHOOK_UNKNOWN_MERCHANT"
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+    assert client.get("/api/v1/webhooks/payment-events").json() == []
 
 
 def test_webhook_rejects_malformed_payload(client, fake_provider, webhook_secret):
@@ -605,3 +638,86 @@ def test_webhook_rejects_malformed_payload(client, fake_provider, webhook_secret
 
     assert response.status_code == 400
     assert response.json()["detail"] == "WEBHOOK_INVALID_PAYLOAD"
+
+
+def test_webhook_supports_context_field_instead_of_account(client, fake_provider, webhook_secret):
+    payment_id = connected_payment(client, fake_provider)
+    payload_dict = json.loads(webhook_payload(payment_id))
+    del payload_dict["account"]
+    payload_dict["context"] = "acct_test_123"
+    payload = json.dumps(payload_dict, separators=(",", ":"))
+
+    response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "processed"}
+    payment = client.get(f"/api/v1/payments/{payment_id}").json()
+    assert payment["status"] == "COMPLETED"
+
+
+def test_webhook_handles_checkout_session_completed_for_payment_link(client, fake_provider, webhook_secret):
+    signup_and_login(client, "owner@example.com", "Acme Store")
+    state = connect_state(client)
+    client.get(f"/api/v1/stripe/callback?code=oauth-code&state={state}", follow_redirects=False)
+
+    link_res = client.post("/api/v1/payment-links", json={"price_id": "price_123", "quantity": 1})
+    assert link_res.status_code == 201
+    payment_id = link_res.json()["id"]
+    link_id = link_res.json()["provider_payment_link_id"]
+
+    checkout_payload = json.dumps(
+        {
+            "id": "evt_checkout_123",
+            "object": "event",
+            "context": "acct_test_123",
+            "type": "checkout.session.completed",
+            "created": int(time.time()),
+            "data": {
+                "object": {
+                    "id": "cs_test_session_123",
+                    "object": "checkout.session",
+                    "payment_intent": "pi_checkout_intent_456",
+                    "payment_link": link_id,
+                    "amount_total": 2500,
+                    "currency": "usd",
+                    "payment_status": "paid",
+                    "status": "complete",
+                    "metadata": {"voic_payment_id": payment_id},
+                }
+            },
+        },
+        separators=(",", ":"),
+    )
+
+    response = client.post(
+        "/api/v1/webhooks/stripe", content=checkout_payload, headers=signed_headers(checkout_payload)
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "processed"}
+
+    payment = client.get(f"/api/v1/payment-links/{payment_id}").json()
+    assert payment["status"] == "COMPLETED"
+    assert payment["provider_payment_id"] == "pi_checkout_intent_456"
+
+    events = client.get("/api/v1/webhooks/payment-events").json()
+    assert len(events) == 1
+    assert events[0]["event_type"] == "checkout.session.completed"
+    assert events[0]["amount"] == 2500
+    assert events[0]["provider_payment_id"] == "pi_checkout_intent_456"
+
+
+def test_webhook_fallback_to_payment_metadata_when_account_and_context_missing(client, fake_provider, webhook_secret):
+    payment_id = connected_payment(client, fake_provider)
+    payload_dict = json.loads(webhook_payload(payment_id))
+    del payload_dict["account"]
+    assert "context" not in payload_dict
+    payload = json.dumps(payload_dict, separators=(",", ":"))
+
+    response = client.post("/api/v1/webhooks/stripe", content=payload, headers=signed_headers(payload))
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "processed"}
+    payment = client.get(f"/api/v1/payments/{payment_id}").json()
+    assert payment["status"] == "COMPLETED"
+

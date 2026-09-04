@@ -7,15 +7,17 @@ from collections.abc import Mapping
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.auth import current_user
+from app.api.webhooks import delete_merchant_stripe_data
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.models.oauth_state import OAuthState
 from app.models.payment import Payment
+from app.models.payment_event import PaymentEvent
 from app.models.provider_connection import ProviderConnection
 from app.models.user import User
 from app.services.providers.base import PaymentProvider
@@ -247,16 +249,27 @@ def callback(
     )
     if other_connection is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="STRIPE_ACCOUNT_ALREADY_CONNECTED")
-    current_connection = db.scalar(
+    old_connections = db.scalars(
         select(ProviderConnection).where(
             ProviderConnection.merchant_id == user.merchant_id,
             ProviderConnection.provider == "stripe",
-            ProviderConnection.status == "connected",
             ProviderConnection.provider_account_id != account_id,
         )
-    )
-    if current_connection is not None:
-        current_connection.status = "disconnected"
+    ).all()
+    for old_connection in old_connections:
+        db.execute(
+            delete(PaymentEvent).where(
+                PaymentEvent.provider_connection_id == old_connection.id,
+            )
+        )
+        db.execute(
+            delete(Payment).where(
+                Payment.provider_connection_id == old_connection.id,
+            )
+        )
+        db.delete(old_connection)
+    if old_connections:
+        db.flush()
     connection = db.scalar(
         select(ProviderConnection).where(
             ProviderConnection.merchant_id == user.merchant_id,
@@ -327,29 +340,36 @@ def disconnect(
     provider: PaymentProvider = Depends(get_payment_provider),
 ) -> None:
     """
-    Disconnect the merchant's Stripe account by deauthorizing the OAuth connection.
+    Disconnect the merchant's Stripe account and remove all Voic-owned Stripe data.
+
+    The merchant and user records are preserved so the merchant stays logged
+    in; provider connections, payments, and payment events for provider
+    ``stripe`` are deleted. Callers should warn that disconnecting
+    permanently removes Stripe data from Voic.
 
     Args:
         user: The authenticated user requesting disconnection.
-        db: Database session for updating the connection status.
+        db: Database session for deleting Stripe records.
         provider: Payment provider instance for calling the deauthorize endpoint.
 
     Raises:
         HTTPException: If no connected Stripe account is found or deauthorization fails.
     """
-    connection = db.scalar(
+    connections = db.scalars(
         select(ProviderConnection).where(
             ProviderConnection.merchant_id == user.merchant_id,
             ProviderConnection.provider == "stripe",
         )
-    )
-    if connection is None or connection.status != "connected":
+    ).all()
+    active = [c for c in connections if c.status == "connected"]
+    if not active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stripe connection not found")
     try:
-        provider.deauthorize(connection.provider_account_id)
+        for connection in active:
+            provider.deauthorize(connection.provider_account_id)
     except Exception as error:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="OAUTH_PROVIDER_ERROR") from error
-    connection.status = "disconnected"
+    delete_merchant_stripe_data(db, user.merchant_id)
     db.commit()
 
 
@@ -544,6 +564,7 @@ class PaymentResponse(BaseModel):
     status: str
     client_secret: str | None = None
     url: str | None = None
+    created_at: datetime | None = None
 
 
 def payment_response(payment: Payment, client_secret: str | None = None, url: str | None = None) -> PaymentResponse:
@@ -568,6 +589,7 @@ def payment_response(payment: Payment, client_secret: str | None = None, url: st
         status=payment.status,
         client_secret=client_secret,
         url=url if url is not None else payment.provider_payment_link_url,
+        created_at=payment.created_at,
     )
 
 
