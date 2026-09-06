@@ -1,15 +1,16 @@
 # AGENTS.md
 
 ## Repo state
-- Fresh scaffold at `0deb120` on `main` (empty `readme.md`); now 37 skills installed.
-- No `package.json`, lockfile, build/test/lint/typecheck config, or `opencode.json` detected. Do not assume npm/pnpm/yarn, test runner, or build command — verify with `Get-ChildItem -Force -Recurse` before adding toolchain claims.
+- `main` tracks `origin/main`. Monorepo: `apps/frontend` (Next.js) + `apps/backend` (FastAPI + Alembic).
+- Toolchain: root `Makefile` + `opencode.json` (playwright MCP); `apps/frontend/package.json` (npm) + `apps/backend/pyproject.toml` (pip, `.venv`).
 - Remote `origin` is `https://github.com/Vighnesh-V-H/voic.git` (`main` branch).
 
 ## Structure
-- `readme.md` — empty, no project description yet.
-- `.agents/skills/` — 37 skills from `mattpocock/skills` (engineering + productivity + misc).
-- `docs/agents/` — `issue-tracker.md` (GitHub) + `domain.md` (single-context `CONTEXT.md` + `docs/adr/`) + `triage-labels.md`; `CONTEXT.md`/`CONTEXT-MAP.md`/`docs/adr/` not yet created (lazy via `/domain-modeling`).
-- `skills-lock.json:1` — tracks 37 installed skills.
+- `readme.md` — project overview (short).
+- `CONTEXT.md` — domain language (single context).
+- `docs/` — `architecture.md`, Stripe/voice guides, `adr/`, `agents/` (issue tracker, triage labels, domain layout).
+- `.agents/skills/` — agent skills, tracked in `skills-lock.json`.
+- `.scratch/` — local issue planning notes (not shipped).
 
 ## Commands
 - Frontend verification: run `npm run lint` and `npm run build` from `apps/frontend`.

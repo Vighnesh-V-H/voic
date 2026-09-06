@@ -43,21 +43,15 @@ frontend-install: ## npm install for apps/frontend
 
 # ---- run ----
 
-.PHONY: backend frontend dev dev-backend dev-frontend
+.PHONY: backend frontend dev
 backend: ## Run FastAPI backend (uvicorn --reload)
 	cd $(BACKEND_DIR) && "$(PYTHON)" -m uvicorn app.main:app --reload --host $(BACKEND_HOST) --port $(BACKEND_PORT)
 
 frontend: ## Run Next.js frontend dev server
 	npm --prefix $(FRONTEND_DIR) run dev
 
-dev-backend: ## Run backend only (for `make -j2 dev`)
-	cd $(BACKEND_DIR) && "$(PYTHON)" -m uvicorn app.main:app --reload --host $(BACKEND_HOST) --port $(BACKEND_PORT)
-
-dev-frontend: ## Run frontend only (for `make -j2 dev`)
-	npm --prefix $(FRONTEND_DIR) run dev
-
 dev: ## Run backend + frontend together in parallel
-	$(MAKE) -j2 dev-backend dev-frontend
+	$(MAKE) -j2 backend frontend
 
 # ---- migrations (alembic, always from apps/backend) ----
 
