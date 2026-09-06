@@ -8,11 +8,14 @@ import binascii
 import json
 import logging
 import struct
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
+
+from app.services.agent.latency import CallLatency, monotonic_ms
 
 logger = logging.getLogger(__name__)
 
@@ -374,23 +377,32 @@ class VoiceBridge:
             )
             return False
         try:
+            latency = CallLatency()
+            connect_started = time.monotonic()
+            phase_started = time.monotonic()
             signed_url = await asyncio.to_thread(
                 _signed_conversation_ws_url, self._api_key, self._agent_id
             )
+            latency.span("signed_url", phase_started)
             try:
                 from websockets.asyncio.client import connect as ws_connect
             except ImportError:
                 from websockets import connect as ws_connect  # type: ignore[no-redef]
 
+            phase_started = time.monotonic()
             websocket = await ws_connect(
                 signed_url,
                 open_timeout=SIGNED_URL_TIMEOUT_SECONDS,
                 ping_interval=None,
                 max_size=2**20,
             )
+            latency.span("ws_open", phase_started)
             self._connections[call_id] = websocket
             self._send_locks[call_id] = asyncio.Lock()
+            phase_started = time.monotonic()
             variables = await asyncio.to_thread(call_context, call_id, self._settings)
+            latency.span("call_context", phase_started)
+            phase_started = time.monotonic()
             await self._send_json(
                 call_id,
                 {
@@ -398,7 +410,13 @@ class VoiceBridge:
                     "dynamic_variables": variables,
                 },
             )
-            logger.info("Voice bridge connected to ElevenLabs for call %s", call_id)
+            latency.span("init_send", phase_started)
+            logger.info(
+                "ElevenLabs connect timing for call %s (total=%dms): %s",
+                call_id,
+                monotonic_ms(connect_started),
+                latency.format(),
+            )
             return True
         except Exception as error:  # noqa: BLE001 - external HTTP/WS boundary
             logger.error(
