@@ -162,7 +162,7 @@ export default async function DashboardPage() {
           <CardDescription>
             {payments.length === 0
               ? "Created, pending, completed, failed, and cancelled payments will list here."
-              : `${payments.length} most recent payments with product names and status.`}
+              : "Every payment with product names, status filters, sorting, and pagination."}
           </CardDescription>
         </CardHeader>
         <CardContent>

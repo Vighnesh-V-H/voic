@@ -32,12 +32,6 @@ async function backendFetch<T>(path: string, cookieHeader: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-const disconnectedStripe: StripeConnection = {
-  provider: "stripe",
-  connected: false,
-  status: "disconnected",
-};
-
 export async function loadDashboardData() {
   const cookieHeader = (await cookies()).toString();
 

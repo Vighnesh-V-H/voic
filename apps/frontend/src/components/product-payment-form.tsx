@@ -25,14 +25,17 @@ import { Spinner } from "@/components/ui/spinner";
  * Create a Payment Link or PaymentIntent for one product's prices.
  *
  * Price options show the product name, amount, and Stripe price ID so the
- * merchant can confirm the exact catalog item.
+ * merchant can confirm the exact catalog item. ``onCreated`` receives the
+ * created payment so a parent island can update UI state instantly.
  */
 export function ProductPaymentForm({
   productName,
   prices,
+  onCreated,
 }: {
   productName: string;
   prices: StripePrice[];
+  onCreated?: (payment: Payment) => void;
 }) {
   const [selectedPrice, setSelectedPrice] = useState(prices[0]?.id ?? "");
   const [quantity, setQuantity] = useState(1);
@@ -61,6 +64,7 @@ export function ProductPaymentForm({
       setNotice(kind === "link" ? "Payment Link created." : "PaymentIntent created.");
       setPaymentLink(kind === "link" ? (result.url ?? null) : null);
       setClientSecret(kind === "payment" ? (result.client_secret ?? null) : null);
+      onCreated?.(result);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "The payment request failed.");
     } finally {

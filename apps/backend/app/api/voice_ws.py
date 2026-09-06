@@ -25,8 +25,11 @@ logger = logging.getLogger(__name__)
 OUT_CONTENT_TYPE = "audio/x-mulaw"
 OUT_SAMPLE_RATE = 8000
 PLAY_CHUNK_BYTES = 480  # 60 ms of μ-law/8 kHz audio.
-PLAY_SEND_INTERVAL_SECONDS = 0.04  # Stay ahead of playback without flooding TCP.
-PLAYBACK_QUEUE_LIMIT = 256
+PLAY_CHUNK_SECONDS = PLAY_CHUNK_BYTES / OUT_SAMPLE_RATE
+# Drain slightly faster than realtime so Vobiz's jitter buffer stays fed
+# while still absorbing ElevenLabs' bursty TTS producer on the queue.
+PLAY_SEND_INTERVAL_SECONDS = PLAY_CHUNK_SECONDS * 0.8
+PLAYBACK_QUEUE_LIMIT = 2048  # ~2 minutes of audio; TTS bursts must never kill the stream.
 BARGE_IN_RMS_THRESHOLD = 900
 BARGE_IN_TRIGGER_FRAMES = 4  # 80 ms at Vobiz's 20 ms frame cadence.
 
@@ -218,10 +221,13 @@ async def _relay_agent_audio(
             try:
                 playback.enqueue_audio(stream_id, event.audio)
             except asyncio.QueueFull:
-                logger.error("Vobiz playback queue overflow for call %s", call_id)
-                playback.clear()
-                await _stop_vobiz_stream(websocket, stream_id, playback)
-                return
+                # A TTS burst outran the sender. Drop the burst's tail instead
+                # of stopping the stream: the agent keeps talking, and the
+                # next utterance plays normally.
+                logger.warning(
+                    "Vobiz playback queue full for call %s; dropping agent audio chunk",
+                    call_id,
+                )
     except asyncio.CancelledError:
         raise
     except Exception:

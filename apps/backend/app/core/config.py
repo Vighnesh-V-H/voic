@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     elevenlabs_agent_id: str = ""
     elevenlabs_phone_number_id: str = ""
     agent_tool_token: str = ""
+    resend_api_key: str = ""
+    resend_from_email: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
