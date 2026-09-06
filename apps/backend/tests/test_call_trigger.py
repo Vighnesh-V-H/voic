@@ -3,6 +3,7 @@ import time
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
 from app.api.stripe import get_payment_provider
 from app.api import webhooks
@@ -78,6 +79,18 @@ def recorded_calls(monkeypatch):
 
     monkeypatch.setattr(vobiz, "place_call", fake_place_call)
     return calls
+
+
+@pytest.fixture(autouse=True)
+def trigger_uses_test_db(test_engine, monkeypatch):
+    """The background trigger owns its session; point it at the test database.
+
+    Webhook-driven tests reach the trigger through a background task that now
+    carries plain IDs only, so the trigger's own session must see the same
+    rows the request session wrote.
+    """
+    TestSession = sessionmaker(bind=test_engine, autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(vobiz, "SessionLocal", TestSession)
 
 
 def failed_payload_with_phone(
