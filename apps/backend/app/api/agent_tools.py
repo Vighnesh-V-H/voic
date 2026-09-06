@@ -80,6 +80,7 @@ def agent_get_payment_status(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Look up payment status and log timing metrics for the agent tool call."""
     denied = check_agent_token(x_agent_token, settings)
     if denied is not None:
         return denied
@@ -107,6 +108,7 @@ def agent_create_checkout_link(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Create a checkout link and log timing metrics for the agent tool call."""
     denied = check_agent_token(x_agent_token, settings)
     if denied is not None:
         return denied
@@ -134,6 +136,7 @@ def agent_send_email(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Send an email and log timing metrics for the agent tool call."""
     denied = check_agent_token(x_agent_token, settings)
     if denied is not None:
         return denied

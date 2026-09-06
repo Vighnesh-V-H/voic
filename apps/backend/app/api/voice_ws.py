@@ -69,6 +69,7 @@ class PlaybackState:
         )
 
     def enqueue_audio(self, stream_id: str, audio: bytes) -> None:
+        """Queue agent audio chunks for playback and track time-to-first-audio latency."""
         if self.suppress_agent_audio or not audio:
             return
         duration = len(audio) / OUT_SAMPLE_RATE
@@ -97,6 +98,7 @@ class PlaybackState:
         self.max_queue_depth = max(self.max_queue_depth, self.queue.qsize())
 
     def summary(self) -> str:
+        """Format all latency metrics as a single log-friendly string."""
         tokens = [f"chunks={self.queued_chunks}"]
         tokens.append(f"max_queue_depth={self.max_queue_depth}")
         if self.queued_chunks:
@@ -336,6 +338,7 @@ async def _handle_local_barge_in(
 
 @router.websocket("/ws/voice/{call_id}")
 async def voice_websocket(websocket: WebSocket, call_id: str) -> None:
+    """Handle full-duplex Vobiz media WebSocket with latency instrumentation."""
     await websocket.accept()
 
     settings = get_settings()
