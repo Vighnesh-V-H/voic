@@ -38,7 +38,7 @@ BARGE_IN_TRIGGER_FRAMES = 4  # 80 ms at Vobiz's 20 ms frame cadence.
 class PlaybackState:
     """Coordinate the independent ElevenLabs receiver and Vobiz sender."""
 
-    queue: asyncio.Queue[str] = field(
+    queue: asyncio.Queue[tuple[float, str]] = field(
         default_factory=lambda: asyncio.Queue(maxsize=PLAYBACK_QUEUE_LIMIT)
     )
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -47,6 +47,20 @@ class PlaybackState:
     barge_in_frames: int = 0
     barge_in_latched: bool = False
     socket_closed: bool = False
+    # Latency instrumentation (log-only, flushed once at call end).
+    max_queue_depth: int = 0
+    queued_chunks: int = 0
+    lag_sum_ms: float = 0.0
+    lag_max_ms: float = 0.0
+    behind_realtime_ms: float = 0.0
+    dropped_bursts: int = 0
+    barge_ins: int = 0
+    # Time-to-first-agent-audio, per utterance. "End of caller speech" is
+    # proxied by the last inbound media frame before the agent audio began.
+    stream_started_at: float | None = None
+    last_caller_media_at: float | None = None
+    awaiting_first_audio: bool = False
+    ttfw_ms: list[int] = field(default_factory=list)
 
     def is_active(self) -> bool:
         return (
@@ -60,9 +74,43 @@ class PlaybackState:
         duration = len(audio) / OUT_SAMPLE_RATE
         now = asyncio.get_running_loop().time()
         self.active_until = max(now, self.active_until) + duration
+        if self.awaiting_first_audio:
+            self.awaiting_first_audio = False
+            if self.last_caller_media_at is not None:
+                value = round((now - self.last_caller_media_at) * 1000)
+                self.ttfw_ms.append(value)
+                from_stream = (
+                    f" stream_start_to_first_audio={round((now - self.stream_started_at) * 1000)}ms"
+                    if self.stream_started_at is not None
+                    else ""
+                )
+                logger.info(
+                    "Time to first agent audio for stream %s (utterance %d): %d ms%s",
+                    stream_id,
+                    len(self.ttfw_ms),
+                    value,
+                    from_stream,
+                )
         for offset in range(0, len(audio), PLAY_CHUNK_BYTES):
             chunk = audio[offset : offset + PLAY_CHUNK_BYTES]
-            self.queue.put_nowait(_play_message(stream_id, chunk))
+            self.queue.put_nowait((now, _play_message(stream_id, chunk)))
+        self.max_queue_depth = max(self.max_queue_depth, self.queue.qsize())
+
+    def summary(self) -> str:
+        tokens = [f"chunks={self.queued_chunks}"]
+        tokens.append(f"max_queue_depth={self.max_queue_depth}")
+        if self.queued_chunks:
+            avg = self.lag_sum_ms / self.queued_chunks
+            tokens.append(f"queue_lag={avg:.0f}/{self.lag_max_ms:.0f}ms")
+            tokens.append(f"behind_realtime={round(self.behind_realtime_ms)}ms")
+        tokens.append(f"dropped_bursts={self.dropped_bursts}")
+        tokens.append(f"barge_ins={self.barge_ins}")
+        if self.ttfw_ms:
+            avg = sum(self.ttfw_ms) / len(self.ttfw_ms)
+            tokens.append(
+                f"ttfw={round(avg)}/{max(self.ttfw_ms)}ms n={len(self.ttfw_ms)}"
+            )
+        return " ".join(tokens)
 
     def clear(self) -> None:
         while True:
@@ -175,7 +223,17 @@ async def _send_playback(
 ) -> None:
     """Pace audio writes to avoid a large OS/Vobiz playback backlog."""
     while True:
-        frame = await playback.queue.get()
+        enqueued_at, frame = await playback.queue.get()
+        lag_ms = (
+            asyncio.get_running_loop().time() - enqueued_at
+        ) * 1000
+        playback.queued_chunks += 1
+        playback.lag_sum_ms += lag_ms
+        if lag_ms > playback.lag_max_ms:
+            playback.lag_max_ms = lag_ms
+        realtime_ms = PLAY_CHUNK_SECONDS * 1000
+        if lag_ms > realtime_ms:
+            playback.behind_realtime_ms += lag_ms - realtime_ms
         if not await _send_text(websocket, frame, playback):
             return
         await asyncio.sleep(PLAY_SEND_INTERVAL_SECONDS)
@@ -206,6 +264,7 @@ async def _relay_agent_audio(
                 return
             if event.kind == "interruption":
                 playback.suppress_agent_audio = True
+                playback.barge_ins += 1
                 await _clear_vobiz_audio(websocket, stream_id, playback)
                 logger.info("ElevenLabs confirmed interruption for call %s", call_id)
                 continue
@@ -213,6 +272,7 @@ async def _relay_agent_audio(
                 playback.suppress_agent_audio = False
                 playback.barge_in_latched = False
                 playback.barge_in_frames = 0
+                playback.awaiting_first_audio = True
                 continue
             if event.kind != "audio" or not event.audio:
                 continue
@@ -224,9 +284,12 @@ async def _relay_agent_audio(
                 # A TTS burst outran the sender. Drop the burst's tail instead
                 # of stopping the stream: the agent keeps talking, and the
                 # next utterance plays normally.
+                playback.dropped_bursts += 1
                 logger.warning(
-                    "Vobiz playback queue full for call %s; dropping agent audio chunk",
+                    "Vobiz playback queue full for call %s; dropping agent audio chunk "
+                    "(dropped_bursts=%d)",
                     call_id,
+                    playback.dropped_bursts,
                 )
     except asyncio.CancelledError:
         raise
@@ -369,6 +432,7 @@ async def voice_websocket(websocket: WebSocket, call_id: str) -> None:
                 if not stream_id:
                     logger.warning("Vobiz start omitted streamId for call %s", call_id)
                     break
+                playback.stream_started_at = asyncio.get_running_loop().time()
                 input_format = _format_label(start.get("mediaFormat"))
                 if attempt.provider_call_id is None and start.get("callId"):
                     attempt.provider_call_id = str(start["callId"])
@@ -421,6 +485,9 @@ async def voice_websocket(websocket: WebSocket, call_id: str) -> None:
                     logger.warning("Ignored invalid Vobiz audio for call %s", call_id)
                     continue
                 if raw:
+                    playback.last_caller_media_at = (
+                        asyncio.get_running_loop().time()
+                    )
                     await _handle_local_barge_in(
                         websocket,
                         bridge,
@@ -469,3 +536,8 @@ async def voice_websocket(websocket: WebSocket, call_id: str) -> None:
         finally:
             session.close()
         logger.info("Vobiz stream closed for call %s", call_id)
+        logger.info(
+            "Voice latency summary for call %s: %s",
+            call_id,
+            playback.summary(),
+        )

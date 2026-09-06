@@ -11,6 +11,7 @@ never stack traces.
 """
 
 import hmac
+import time
 from logging import getLogger
 
 from fastapi import APIRouter, Depends, Header
@@ -83,8 +84,13 @@ def agent_get_payment_status(
     if denied is not None:
         return denied
     try:
+        started = time.monotonic()
         result = get_payment_status(db, payload.payment_id, payload.conversation_id)
-        logger.info("Agent get-payment-status completed for payment %s", result["payment_id"])
+        logger.info(
+            "Agent get-payment-status completed for payment %s (%d ms)",
+            result["payment_id"],
+            round((time.monotonic() - started) * 1000),
+        )
         return result
     except ToolError as error:
         logger.warning("Agent get-payment-status rejected (%s)", error.code)
@@ -105,8 +111,13 @@ def agent_create_checkout_link(
     if denied is not None:
         return denied
     try:
+        started = time.monotonic()
         result = create_checkout_link(db, settings, payload.payment_id, payload.conversation_id)
-        logger.info("Agent create-checkout-link completed for payment %s", result["payment_id"])
+        logger.info(
+            "Agent create-checkout-link completed for payment %s (%d ms)",
+            result["payment_id"],
+            round((time.monotonic() - started) * 1000),
+        )
         return result
     except ToolError as error:
         logger.warning("Agent create-checkout-link rejected (%s)", error.code)
@@ -127,8 +138,13 @@ def agent_send_email(
     if denied is not None:
         return denied
     try:
+        started = time.monotonic()
         result = send_email(db, settings, payload.payment_id, payload.conversation_id, str(payload.to), payload.subject, payload.body)
-        logger.info("Agent send-email completed for payment %s", payload.payment_id.strip())
+        logger.info(
+            "Agent send-email completed for payment %s (%d ms)",
+            payload.payment_id.strip(),
+            round((time.monotonic() - started) * 1000),
+        )
         return result
     except ToolError as error:
         logger.warning("Agent send-email rejected (%s)", error.code)
