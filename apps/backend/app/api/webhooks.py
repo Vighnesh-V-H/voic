@@ -18,6 +18,13 @@ from app.models.payment_event import PaymentEvent
 from app.models.provider_connection import ProviderConnection
 from app.models.user import User
 from app.services.calls import vobiz as vobiz_calls
+from app.services.payment_intake import (
+    ProviderRefs,
+    correlate_payment,
+    extract_provider_refs,
+    object_id,
+    resolve_connection,
+)
 from app.services.providers.stripe import StripeProvider, verify_webhook_signature
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -114,17 +121,6 @@ def event_time(value: object) -> datetime:
     if isinstance(value, (int, float)):
         return datetime.fromtimestamp(value, tz=UTC)
     return datetime.now(UTC)
-
-
-def object_id(value: object) -> str | None:
-    """Return a provider object ID from an expanded object or plain ID."""
-    if isinstance(value, str) and value:
-        return value
-    if isinstance(value, Mapping):
-        candidate = value.get("id")
-        if isinstance(candidate, str) and candidate:
-            return candidate
-    return None
 
 
 def customer_data(
@@ -248,210 +244,6 @@ def normalized_payment_status(event_type: str, event_object: Mapping[str, object
     return None
 
 
-def payment_for_event(
-    db: Session,
-    merchant_id: str,
-    connection: ProviderConnection,
-    provider_payment_id: str | None,
-    metadata: Mapping[str, object],
-    provider_payment_link_id: str | None = None,
-    provider_subscription_id: str | None = None,
-    provider_invoice_id: str | None = None,
-) -> Payment | None:
-    """
-    Locate a payment record matching the event's metadata, subscription,
-    invoice, provider payment ID, or payment link ID.
-
-    Args:
-        db: Database session for querying payment records.
-        merchant_id: The merchant ID owning the payment.
-        connection: The provider connection associated with the event.
-        provider_payment_id: The provider's payment ID from the event.
-        metadata: The event metadata containing voic_payment_id.
-        provider_payment_link_id: Optional provider payment link ID from checkout sessions.
-        provider_subscription_id: Optional provider subscription ID from subscription-mode events.
-        provider_invoice_id: Optional provider invoice ID from invoice events.
-
-    Returns:
-        The matching Payment record or None if not found.
-    """
-    local_payment_id = metadata.get("voic_payment_id")
-    if isinstance(local_payment_id, str):
-        payment = db.scalar(
-            select(Payment).where(
-                Payment.id == local_payment_id,
-                Payment.merchant_id == merchant_id,
-                Payment.provider_connection_id == connection.id,
-                Payment.provider_account_id == connection.provider_account_id,
-            )
-        )
-        if payment is not None:
-            return payment
-    if provider_subscription_id is not None:
-        payment = db.scalar(
-            select(Payment).where(
-                Payment.provider == "stripe",
-                Payment.provider_subscription_id == provider_subscription_id,
-                Payment.merchant_id == merchant_id,
-                Payment.provider_connection_id == connection.id,
-                Payment.provider_account_id == connection.provider_account_id,
-            )
-        )
-        if payment is not None:
-            return payment
-    if provider_invoice_id is not None:
-        payment = db.scalar(
-            select(Payment).where(
-                Payment.provider == "stripe",
-                Payment.provider_invoice_id == provider_invoice_id,
-                Payment.merchant_id == merchant_id,
-                Payment.provider_connection_id == connection.id,
-                Payment.provider_account_id == connection.provider_account_id,
-            )
-        )
-        if payment is not None:
-            return payment
-    if provider_payment_id is not None:
-        payment = db.scalar(
-            select(Payment).where(
-                Payment.provider == "stripe",
-                Payment.provider_payment_id == provider_payment_id,
-                Payment.merchant_id == merchant_id,
-                Payment.provider_connection_id == connection.id,
-                Payment.provider_account_id == connection.provider_account_id,
-            )
-        )
-        if payment is not None:
-            return payment
-    if provider_payment_link_id is not None:
-        return db.scalar(
-            select(Payment).where(
-                Payment.provider == "stripe",
-                Payment.provider_payment_link_id == provider_payment_link_id,
-                Payment.merchant_id == merchant_id,
-                Payment.provider_connection_id == connection.id,
-                Payment.provider_account_id == connection.provider_account_id,
-            )
-        )
-    return None
-
-
-def subscription_ref(event_object: Mapping[str, object]) -> str | None:
-    """
-    Extract a Stripe subscription ID from a Checkout Session or invoice object.
-
-    Handles both the legacy top-level ``subscription`` field and the newer
-    ``parent.subscription_details.subscription`` shape on invoices. Values may
-    be plain IDs or expanded objects; anything else yields None.
-
-    Args:
-        event_object: The Stripe event's data object.
-
-    Returns:
-        The subscription ID or None if the event carries none.
-    """
-    candidate: object = event_object.get("subscription")
-    if isinstance(candidate, Mapping):
-        candidate = candidate.get("id")
-    if isinstance(candidate, str) and candidate:
-        return candidate
-    parent = event_object.get("parent")
-    if isinstance(parent, Mapping):
-        details = parent.get("subscription_details")
-        if isinstance(details, Mapping):
-            candidate = details.get("subscription")
-            if isinstance(candidate, Mapping):
-                candidate = candidate.get("id")
-            if isinstance(candidate, str) and candidate:
-                return candidate
-    return None
-
-
-def invoice_ref(event_object: Mapping[str, object]) -> str | None:
-    """
-    Extract a Stripe invoice ID from a Checkout Session or invoice-payment object.
-
-    Values may be plain IDs or expanded objects; anything else yields None.
-
-    Args:
-        event_object: The Stripe event's data object.
-
-    Returns:
-        The invoice ID or None if the event carries none.
-    """
-    candidate: object = event_object.get("invoice")
-    if isinstance(candidate, Mapping):
-        candidate = candidate.get("id")
-    if isinstance(candidate, str) and candidate:
-        return candidate
-    return None
-
-
-def payment_for_provider_ref(
-    db: Session,
-    provider_payment_id: str | None,
-    provider_payment_link_id: str | None,
-    provider_subscription_id: str | None,
-    provider_invoice_id: str | None = None,
-) -> Payment | None:
-    """
-    Locate any Voic payment by a Stripe-asserted provider reference.
-
-    Used only when the signed event envelope carries no connected account, so
-    the merchant boundary cannot be resolved the primary way. Unlike metadata
-    (a merchant-controlled string), these references are Stripe-asserted facts
-    about which provider object the event concerns, and each provider object
-    belongs to exactly one connected account. Never consults metadata.
-
-    Args:
-        db: Database session for querying payment records.
-        provider_payment_id: The provider payment ID from the event.
-        provider_payment_link_id: The provider payment link ID from the event.
-        provider_subscription_id: The provider subscription ID from the event.
-        provider_invoice_id: The provider invoice ID from the event.
-
-    Returns:
-        The matching Payment record or None if no stored reference matches.
-    """
-    if provider_payment_link_id is not None:
-        payment = db.scalar(
-            select(Payment).where(
-                Payment.provider == "stripe",
-                Payment.provider_payment_link_id == provider_payment_link_id,
-            )
-        )
-        if payment is not None:
-            return payment
-    if provider_subscription_id is not None:
-        payment = db.scalar(
-            select(Payment).where(
-                Payment.provider == "stripe",
-                Payment.provider_subscription_id == provider_subscription_id,
-            )
-        )
-        if payment is not None:
-            return payment
-    if provider_invoice_id is not None:
-        payment = db.scalar(
-            select(Payment).where(
-                Payment.provider == "stripe",
-                Payment.provider_invoice_id == provider_invoice_id,
-            )
-        )
-        if payment is not None:
-            return payment
-    if provider_payment_id is not None:
-        payment = db.scalar(
-            select(Payment).where(
-                Payment.provider == "stripe",
-                Payment.provider_payment_id == provider_payment_id,
-            )
-        )
-        if payment is not None:
-            return payment
-    return None
-
-
 def close_queued_call_attempts(db: Session, merchant_id: str, payment_id: str, now: datetime) -> None:
     """Stop recovery jobs that have not dialed yet after a payment succeeds."""
     db.execute(
@@ -524,73 +316,20 @@ async def stripe_webhook(
         logger.info("Ignoring %s event without account: no payment semantics", event_type)
         return {"status": "ignored"}
 
-    provider_payment_id: str | None = None
-    payment_link_id: str | None = None
-    subscription_id: str | None = None
-    invoice_id: str | None = None
-    if isinstance(event_object, Mapping):
-        provider_payment_id = object_id(event_object.get("id"))
-        payment_link_id = event_object.get("payment_link")
-        related_payment_intent = object_id(event_object.get("payment_intent"))
-        if event_type.startswith("invoice_payment."):
-            payment = event_object.get("payment")
-            related_payment_intent = (
-                object_id(payment.get("payment_intent")) if isinstance(payment, Mapping) else None
-            )
-        if related_payment_intent is not None:
-            provider_payment_id = related_payment_intent
-        elif event_type.startswith(("checkout.session.", "invoice.", "invoice_payment.")):
-            # Session, invoice, and invoice-payment IDs are not PaymentIntent IDs.
-            provider_payment_id = None
-        subscription_id = subscription_ref(event_object)
-        invoice_id = invoice_ref(event_object)
-
-    provider_payment_id = provider_payment_id if isinstance(provider_payment_id, str) else None
-    payment_link_id = payment_link_id if isinstance(payment_link_id, str) else None
-    connection: ProviderConnection | None = None
-    if account_id is not None:
-        connection = db.scalar(
-            select(ProviderConnection).where(
-                ProviderConnection.provider == "stripe",
-                ProviderConnection.provider_account_id == account_id,
-            )
+    refs = (
+        extract_provider_refs(event_type, event_object)
+        if isinstance(event_object, Mapping)
+        else ProviderRefs()
+    )
+    provider_payment_id = refs.payment_id
+    connection = resolve_connection(db, settings, account_id, refs)
+    if connection is None and account_id is None:
+        logger.warning(
+            "Rejecting Stripe webhook: unroutable event id=%s type=%s (no signed account, unknown provider references)",
+            event_id,
+            event_type,
         )
-    else:
-        configured_account_id = (settings.stripe_webhook_account_id or "").strip()
-        hint = payment_for_provider_ref(db, provider_payment_id, payment_link_id, subscription_id, invoice_id)
-        if hint is not None:
-            connection = db.scalar(
-                select(ProviderConnection).where(
-                    ProviderConnection.id == hint.provider_connection_id,
-                    ProviderConnection.provider == "stripe",
-                )
-            )
-        if connection is None:
-            if configured_account_id:
-                connection = db.scalar(
-                    select(ProviderConnection).where(
-                        ProviderConnection.provider == "stripe",
-                        ProviderConnection.provider_account_id == configured_account_id,
-                    )
-                )
-        if connection is None and not configured_account_id:
-            # A single connected account is an unambiguous local-dev fallback.
-            # Production Connect webhooks should always carry account/context.
-            connections = db.scalars(
-                select(ProviderConnection).where(
-                    ProviderConnection.provider == "stripe",
-                    ProviderConnection.status == "connected",
-                )
-            ).all()
-            if len(connections) == 1:
-                connection = connections[0]
-        if connection is None:
-            logger.warning(
-                "Rejecting Stripe webhook: unroutable event id=%s type=%s (no signed account, unknown provider references)",
-                event_id,
-                event_type,
-            )
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="WEBHOOK_INVALID_PAYLOAD")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="WEBHOOK_INVALID_PAYLOAD")
     if event_type == "account.application.deauthorized":
         if connection is None:
             logger.info("Ignoring deauthorized event for unknown account %s", account_id)
@@ -702,8 +441,8 @@ async def stripe_webhook(
     failed_transition = False
     completed_transition = False
     if event_type == "payment_intent.payment_failed":
-        payment = payment_for_event(
-            db, connection.merchant_id, connection, provider_payment_id, metadata, payment_link_id
+        payment = correlate_payment(
+            db, refs, metadata, merchant_id=connection.merchant_id, connection=connection
         )
         if payment is not None:
             if payment.provider_payment_id is None and provider_payment_id is not None:
@@ -716,9 +455,8 @@ async def stripe_webhook(
                 payment.last_event_at = occurred_at
                 failed_transition = True
     elif event_type == "checkout.session.completed":
-        payment = payment_for_event(
-            db, connection.merchant_id, connection, provider_payment_id, metadata, payment_link_id,
-            subscription_id, invoice_id,
+        payment = correlate_payment(
+            db, refs, metadata, merchant_id=connection.merchant_id, connection=connection
         )
         if payment is not None:
             if (
@@ -729,13 +467,13 @@ async def stripe_webhook(
                 # Only real PaymentIntent IDs; session IDs (cs_*) must not
                 # pollute the column or later PI events won't correlate.
                 payment.provider_payment_id = provider_payment_id
-            if payment.provider_subscription_id is None and subscription_id is not None:
+            if payment.provider_subscription_id is None and refs.subscription_id is not None:
                 # Subscription-mode checkout: remember the subscription so later
                 # invoice events (which carry no payment metadata) correlate.
-                payment.provider_subscription_id = subscription_id
-            if payment.provider_invoice_id is None and invoice_id is not None:
+                payment.provider_subscription_id = refs.subscription_id
+            if payment.provider_invoice_id is None and refs.invoice_id is not None:
                 # Initial invoice of a subscription-mode checkout.
-                payment.provider_invoice_id = invoice_id
+                payment.provider_invoice_id = refs.invoice_id
             last_event_at = payment.last_event_at
             if last_event_at is not None and last_event_at.tzinfo is None:
                 last_event_at = last_event_at.replace(tzinfo=UTC)
@@ -770,9 +508,8 @@ async def stripe_webhook(
     ) and payment is not None:
         # Call trigger: this event flipped the payment (to FAILED, or — demo
         # flag only — to COMPLETED, where the checkout phone is reliable), so
-        # enqueue one Vobiz recovery call. Runs after the response; the
-        # trigger itself decides (phone present, Vobiz configured) and never
-        # raises.
+        # enqueue one Vobiz recovery call. Runs after the response with plain
+        # IDs only; the trigger owns its session and never raises.
         background.add_task(
             vobiz_calls.trigger_recovery_call,
             settings,
@@ -780,7 +517,6 @@ async def stripe_webhook(
             merchant_id=connection.merchant_id,
             payment_id=payment.id,
             customer_phone=customer_phone,
-            db=db,
         )
     return {"status": "processed"}
 

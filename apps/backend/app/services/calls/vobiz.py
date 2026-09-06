@@ -149,8 +149,9 @@ def trigger_recovery_call(
         merchant_id: Merchant that owns the payment (for log scoping).
         payment_id: Voic payment ID the call is about.
         customer_phone: Normalized customer phone, if the event carried one.
-        db: Optional database session. Webhook tasks pass their request session;
-            direct workers create and close their own session.
+        db: Optional database session for direct callers. Background tasks
+            pass no session; the trigger creates and closes its own, so a
+            request session never crosses the background seam.
 
     Returns:
         ``"called:<provider_id>"`` on success, otherwise a
