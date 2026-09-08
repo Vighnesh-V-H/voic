@@ -1,7 +1,10 @@
 # Voic monorepo — frontend (Next.js), backend (FastAPI), migrations (Alembic)
 #
 # Usage from repo root:
-#   make backend        # run FastAPI with uvicorn --reload (apps/backend)
+#   make backend        # run backend + stripe listen + ngrok in parallel
+#   make backend-serve  # run FastAPI with uvicorn --reload only (apps/backend)
+#   make backend-stripe # forward Stripe Connect webhooks to localhost:8000
+#   make backend-ngrok  # expose localhost:8000 via ngrok
 #   make frontend       # run Next.js dev server (apps/frontend)
 #   make dev            # run both backend + frontend in parallel (make -j2)
 #   make migrate        # alembic upgrade head (apps/backend)
@@ -17,6 +20,10 @@ FRONTEND_DIR := apps/frontend
 
 BACKEND_HOST ?= 127.0.0.1
 BACKEND_PORT ?= 8000
+
+# Local webhook forwarding (kept in sync with BACKEND_PORT).
+# Uses --forward-connect-to so Stripe preserves the connected-account envelope.
+STRIPE_FORWARD_TO ?= localhost:$(BACKEND_PORT)/api/v1/webhooks/stripe
 
 # venv python, relative to BACKEND_DIR (recipes `cd` there first).
 ifeq ($(OS),Windows_NT)
@@ -43,9 +50,18 @@ frontend-install: ## npm install for apps/frontend
 
 # ---- run ----
 
-.PHONY: backend frontend dev
-backend: ## Run FastAPI backend (uvicorn --reload)
+.PHONY: backend backend-serve backend-stripe backend-ngrok frontend dev
+backend-serve: ## Run FastAPI backend only (uvicorn --reload)
 	cd $(BACKEND_DIR) && "$(PYTHON)" -m uvicorn app.main:app --reload --host $(BACKEND_HOST) --port $(BACKEND_PORT)
+
+backend-stripe: ## Forward Stripe Connect webhooks to local backend (requires stripe CLI)
+	stripe listen --forward-connect-to $(STRIPE_FORWARD_TO)
+
+backend-ngrok: ## Expose local backend via ngrok (requires ngrok)
+	ngrok http $(BACKEND_PORT)
+
+backend: ## Run backend + Stripe forwarding + ngrok together in parallel
+	$(MAKE) -j3 backend-serve backend-stripe backend-ngrok
 
 frontend: ## Run Next.js frontend dev server
 	npm --prefix $(FRONTEND_DIR) run dev
