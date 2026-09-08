@@ -36,12 +36,13 @@ def recovery_voice_xml(message: str) -> str:
     )
 
 
-def stream_voice_xml(ws_url: str, fallback_message: str) -> str:
+def stream_voice_xml(ws_url: str) -> str:
     """Build the bidirectional-stream answer XML for a recovery call.
 
     Vobiz connects back to ``ws_url`` (which carries the call-attempt id)
-    and forks live audio over it. If the stream cannot start, Vobiz falls
-    through to the ``Speak`` fallback instead of dropping the caller.
+    and forks live audio over it. The stream is the only media action: the
+    ElevenLabs agent speaks alone, with no overlapping ``Speak`` prompt and
+    no hangup after it (``keepCallAlive`` holds the call open).
     """
     from xml.sax.saxutils import escape
 
@@ -52,7 +53,6 @@ def stream_voice_xml(ws_url: str, fallback_message: str) -> str:
         'contentType="audio/x-mulaw;rate=8000">'
         f"{escape(ws_url)}"
         "</Stream>"
-        f"<Speak>{escape(fallback_message)}</Speak>"
         "</Response>"
     )
 
@@ -124,7 +124,7 @@ def answer_call(
     )
     return Response(
         content=stream_voice_xml(
-            f"{base}/ws/voice/{attempt_id}?{stream_query}", message
+            f"{base}/ws/voice/{attempt_id}?{stream_query}"
         ),
         media_type="application/xml",
     )

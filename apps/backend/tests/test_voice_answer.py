@@ -179,6 +179,46 @@ def test_answer_does_not_cross_merchant_call_attempts(client, fake_provider, db_
     assert "could not verify this payment reminder" in response.text
 
 
+def test_answer_streams_without_speak_for_callable_payment(client, fake_provider, db_session):
+    """Stream path: the agent speaks alone — no Speak prompt and no Hangup."""
+    payment_id = connected_payment(client, fake_provider)
+    payment = db_session.get(Payment, payment_id)
+    payment.status = "FAILED"
+    attempt = CallAttempt(
+        merchant_id=payment.merchant_id,
+        payment_id=payment.id,
+        provider="vobiz",
+        status="PLACED",
+    )
+    db_session.add(attempt)
+    db_session.commit()
+    settings = Settings(_env_file=None, **VOBIZ_SETTINGS)
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    try:
+        response = client.post(recovery_answer_url(settings, payment_id, attempt.id))
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/xml")
+    document = ElementTree.fromstring(response.content)
+    assert document.tag == "Response"
+    assert document.find("Speak") is None
+    assert document.find("Hangup") is None
+    stream = document.find("Stream")
+    assert stream is not None
+    assert stream.get("keepCallAlive") == "true"
+    stream_url = urlparse(stream.text)
+    assert stream_url.scheme == "wss"
+    assert stream_url.path == f"/ws/voice/{attempt.id}"
+    stream_params = parse_qs(stream_url.query)
+    assert stream_params["payment_id"] == [payment_id]
+    assert stream_params["signature"] == [
+        callback_signature(VOBIZ_SETTINGS["voice_callback_token"], payment_id, attempt.id)
+    ]
+
+
 def test_answer_rejects_missing_or_wrong_callback_signature(client):
     app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None, **VOBIZ_SETTINGS)
     try:
