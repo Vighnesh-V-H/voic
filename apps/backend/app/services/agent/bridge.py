@@ -79,7 +79,15 @@ def _connection_error_label(error: Exception) -> str:
     status_code = getattr(response, "status_code", None)
     if status_code is not None:
         return f"HTTP {status_code}"
-    return type(error).__name__
+    label = type(error).__name__
+    # WebSocket closes carry the server's code/reason (e.g. ElevenLabs 3000
+    # quota_exceeded). Surface them: without this, every upstream cut logs
+    # identically and billing/auth failures are indistinguishable from faults.
+    close_code = getattr(error, "code", None)
+    close_reason = getattr(error, "reason", None)
+    if close_code is not None or close_reason is not None:
+        label += f" code={close_code} reason={close_reason}"
+    return label
 
 
 def _signed_conversation_ws_url(api_key: str, agent_id: str) -> str:
